@@ -14,7 +14,7 @@ Windows Host (.NET 8 win-x64)
   ├─ RhythmSampler + monotonic deadline clock
   ├─ BrokerClient / InputSafetyCoordinator
   ├─ RhythmStatePublisher / NotificationService
-  └─ PreviewWindowHost（独立原生窗口）
+  └─ PreviewWindowHost（独立原生窗口，可独立于攻击会话启动）
         │ authenticated named pipe
         ▼
 管理员 Input Broker

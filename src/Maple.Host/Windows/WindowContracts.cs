@@ -20,6 +20,36 @@ public interface IWindowLocator
     Task<IReadOnlyList<WindowIdentity>> FindRunningMapleClientsAsync(CancellationToken cancellationToken);
 }
 
+public sealed record PreviewTargetResolution(bool Success, string Code, WindowIdentity? Target)
+{
+    public static PreviewTargetResolution Resolved(WindowIdentity target) =>
+        new(true, "PREVIEW_TARGET_RESOLVED", target);
+
+    public static PreviewTargetResolution Rejected(string code) =>
+        new(false, code, null);
+}
+
+public static class PreviewTargetResolver
+{
+    public static async Task<PreviewTargetResolution> ResolveAsync(
+        IWindowLocator windows,
+        WindowIdentity? boundTarget,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(windows);
+        if (boundTarget is not null) return PreviewTargetResolution.Resolved(boundTarget);
+
+        IReadOnlyList<WindowIdentity> candidates =
+            await windows.FindRunningMapleClientsAsync(cancellationToken);
+        return candidates.Count switch
+        {
+            0 => PreviewTargetResolution.Rejected("TARGET_NOT_FOUND"),
+            1 => PreviewTargetResolution.Resolved(candidates[0]),
+            _ => PreviewTargetResolution.Rejected("TARGET_MULTIPLE")
+        };
+    }
+}
+
 public static class MapleClientWindowFingerprint
 {
     public const string Title = "冒险岛怀旧服";

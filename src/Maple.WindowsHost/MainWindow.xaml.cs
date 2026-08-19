@@ -37,6 +37,7 @@ public partial class MainWindow : Window
     private IBrokerConnection? connection;
     private BrokerHeartbeatLoop? heartbeatLoop;
     private Preview.PreviewWindowHost? previewHost;
+    private IWindowLocator? windowLocator;
     private WindowIdentity? boundTarget;
     private string? requestedStopReason;
 
@@ -75,8 +76,9 @@ public partial class MainWindow : Window
             Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
         ClientBrowser.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
         ClientBrowser.Source = new Uri("https://maple.local/index.html");
+        windowLocator = new WindowsHost.Windows.NativeWindowLocator();
         sessionService = new StationarySessionApplicationService(
-            new WindowsHost.Windows.NativeWindowLocator(),
+            windowLocator,
             new WindowsHost.Windows.NativeForegroundSession(),
             new WindowsBrokerProcessLauncher(brokerPath),
             new ManualInitialFacingProvider());
@@ -273,13 +275,24 @@ public partial class MainWindow : Window
 
     private async Task OpenPreviewAsync()
     {
-        if (boundTarget is null)
+        if (windowLocator is null)
         {
-            PublishBridgeMessage(new { type = "stationary.error", error = "PREVIEW_REQUIRES_BOUND_WINDOW" });
+            PublishBridgeMessage(new { type = "stationary.error", error = "HOST_NOT_READY" });
             return;
         }
+
+        PreviewTargetResolution targetResolution = await PreviewTargetResolver.ResolveAsync(
+            windowLocator,
+            boundTarget,
+            lifetime.Token);
+        if (!targetResolution.Success || targetResolution.Target is null)
+        {
+            PublishBridgeMessage(new { type = "stationary.error", error = targetResolution.Code });
+            return;
+        }
+
         previewHost ??= new Preview.PreviewWindowHost();
-        await previewHost.ShowAsync(boundTarget.Hwnd, lifetime.Token);
+        await previewHost.ShowAsync(targetResolution.Target.Hwnd, lifetime.Token);
     }
 
     private void PublishLoadedConfig()
