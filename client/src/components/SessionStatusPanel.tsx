@@ -7,6 +7,7 @@ import { postBridgeCommand } from '../bridge/bridge'
 const phaseLabels: Record<string, string> = {
   idle: '等待开始',
   attackHolding: '持续攻击',
+  attackReleased: '攻击释放缓冲',
   moveFirst: '第一方向移动',
   moveGap: '无按键间隔',
   moveSecond: '反向移动',
@@ -16,7 +17,8 @@ const phaseLabels: Record<string, string> = {
 }
 
 const nextPhaseLabels: Record<string, string> = {
-  attackHolding: '第一方向移动',
+  attackHolding: '攻击释放缓冲',
+  attackReleased: '第一方向移动',
   moveFirst: '无按键间隔',
   moveGap: '反向移动',
   moveSecond: '稳定等待',
@@ -28,6 +30,7 @@ export function SessionStatusPanel({ state }: { state: SessionState }) {
   const remainingMs = useRhythmCountdown(state.rhythm)
   const phase = state.rhythm?.phase ?? 'idle'
   const active = state.status === 'running'
+  const movementTransition = phase === 'attackReleased' || phase === 'moveFirst' || phase === 'moveGap' || phase === 'moveSecond' || phase === 'stabilizing' || phase === 'resting'
 
   return (
     <section className="status-panel" aria-labelledby="session-status-title">
@@ -45,10 +48,14 @@ export function SessionStatusPanel({ state }: { state: SessionState }) {
       {state.stopReason && <Alert type="info" showIcon title="会话已停止" description={stopReasonMessage(state.stopReason)} />}
 
       <div className="countdown-block" aria-live="polite">
-        <Typography.Text className="countdown-label">本阶段剩余</Typography.Text>
+        <Typography.Text className="countdown-label">
+          {movementTransition ? '下轮攻击前剩余' : '本阶段剩余'}
+        </Typography.Text>
         <Statistic value={remainingMs / 1000} precision={3} suffix="秒" />
         <Typography.Text type="secondary">
-          本轮攻击总时长 {formatDurationSeconds(state.rhythm?.sampledDurationMs ?? 0)}
+          {movementTransition
+            ? '完成左右移动和稳定等待后才会进入下一轮攻击'
+            : `本轮攻击总时长 ${formatDurationSeconds(state.rhythm?.sampledDurationMs ?? 0)}`}
         </Typography.Text>
       </div>
 

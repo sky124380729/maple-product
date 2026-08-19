@@ -32,6 +32,7 @@ public sealed class StationarySessionControllerTests
         Assert.Equal(
             [
                 StationaryPhase.AttackHolding,
+                StationaryPhase.AttackReleased,
                 StationaryPhase.MoveFirst,
                 StationaryPhase.MoveGap,
                 StationaryPhase.MoveSecond,
@@ -79,6 +80,50 @@ public sealed class StationarySessionControllerTests
         Assert.Equal(27_438, actions.Leases[0]);
         Assert.Equal(80, actions.Leases[1]);
         Assert.Equal(81, actions.Leases[2]);
+    }
+
+    [Fact]
+    public async Task Completes_the_full_movement_transition_before_the_next_attack_cycle()
+    {
+        var actions = new RecordingActionSink();
+        var publisher = new RecordingPublisher();
+        var controller = CreateController(
+            actions,
+            publisher,
+            new AdvancingScheduler(),
+            new SequenceRandomSource(
+                16, 27_438, 80, 30, 81, 80,
+                16, 27_438, 80, 30, 81, 80),
+            TestConfig() with { RestEnabled = false });
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, CancellationToken.None);
+
+        Assert.Equal(
+            [
+                "AttackHolding",
+                "AttackReleased",
+                "MoveFirst",
+                "MoveGap",
+                "MoveSecond",
+                "Stabilizing",
+                "AttackHolding",
+                "AttackReleased",
+                "MoveFirst",
+                "MoveGap",
+                "MoveSecond",
+                "Stabilizing",
+                "Stopped"
+            ],
+            publisher.States.Select(state => state.Phase.ToString()));
+
+        StationaryRhythmState attackReleased = publisher.States[1];
+        Assert.Equal(100, attackReleased.PhaseDeadlineMonoMs - attackReleased.PhaseStartedMonoMs);
+
+        int secondAttack = actions.Events.FindIndex(1, item => item == "Down:Attack");
+        Assert.True(secondAttack > 0);
+        Assert.Equal(
+            ["Up:Attack", "Down:MoveLeft", "Up:MoveLeft", "Down:MoveRight", "Up:MoveRight"],
+            actions.Events[(secondAttack - 5)..secondAttack]);
     }
 
     [Fact]

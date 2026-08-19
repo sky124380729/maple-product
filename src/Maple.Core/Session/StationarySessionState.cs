@@ -13,6 +13,7 @@ public enum StationaryPhase
 {
     Idle,
     AttackHolding,
+    AttackReleased,
     MoveFirst,
     MoveGap,
     MoveSecond,

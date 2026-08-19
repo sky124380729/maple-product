@@ -17,6 +17,8 @@ public sealed class StationarySessionController(
     IRandomSource random,
     IStationaryStatePublisher publisher)
 {
+    private const int AttackReleaseSettleMs = 100;
+
     public async Task RunAsync(
         Guid sessionId,
         MovementDirection initialFacing,
@@ -46,6 +48,14 @@ public sealed class StationarySessionController(
                     StationaryPhase.AttackHolding,
                     StationaryInputAction.Attack,
                     attack.DurationMs,
+                    attack.DurationMs,
+                    cancellationToken);
+
+                await DelayPhaseAsync(
+                    sessionId,
+                    cycleId,
+                    StationaryPhase.AttackReleased,
+                    AttackReleaseSettleMs,
                     attack.DurationMs,
                     cancellationToken);
 

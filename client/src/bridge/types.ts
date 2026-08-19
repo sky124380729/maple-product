@@ -1,6 +1,7 @@
 export type StationaryPhase =
   | 'idle'
   | 'attackHolding'
+  | 'attackReleased'
   | 'moveFirst'
   | 'moveGap'
   | 'moveSecond'

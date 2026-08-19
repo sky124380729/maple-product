@@ -42,6 +42,7 @@ Idle
  -> LocatingWindow
  -> ArmingBroker
  -> Running.AttackHolding
+ -> Running.AttackReleased
  -> Running.MoveFirst
  -> Running.MoveGap
  -> Running.MoveSecond
@@ -57,12 +58,13 @@ Idle
 
 实现必须满足以下时序不变量：
 
-1. 第一方向 `KeyDown` 成功后，必须等待其保持时间结束并收到 `KeyUp` 成功结果。
-2. 间隔任务完成前，不能发送第二方向。
-3. 第二方向必须独立完成 `KeyDown -> 等待 -> KeyUp`；任一结果失败，当前会话停止。
-4. 第二方向 `KeyUp` 返回成功后，还必须完成稳定等待。
-5. 稳定等待完成后，才允许抽样下一轮攻击时长并发送新的攻击 `KeyDown`。
-6. 控制器测试必须断言完整事件序列，而不是只断言方法被调用。
+1. 攻击 `KeyUp` 成功后必须完成固定 `100ms` 的 `AttackReleased` 无按键缓冲，之后才能发送第一方向。
+2. 第一方向 `KeyDown` 成功后，必须等待其保持时间结束并收到 `KeyUp` 成功结果。
+3. 间隔任务完成前，不能发送第二方向。
+4. 第二方向必须独立完成 `KeyDown -> 等待 -> KeyUp`；任一结果失败，当前会话停止。
+5. 第二方向 `KeyUp` 返回成功后，还必须完成稳定等待。
+6. 稳定等待完成后，才允许抽样下一轮攻击时长并发送新的攻击 `KeyDown`。
+7. 控制器测试必须断言完整事件序列，而不是只断言方法被调用。
 
 不得把“取消第二方向后继续攻击”当成容错。第二方向失败是安全停止条件。
 

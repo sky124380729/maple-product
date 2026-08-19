@@ -115,6 +115,31 @@ describe('StationaryAttackPage', () => {
     expect(container.querySelector('.ant-statistic-content-value')).toHaveTextContent('27.438')
   })
 
+  it('makes the movement transition explicit after an attack phase', () => {
+    render(<StationaryAttackPage />)
+
+    act(() => bridgeListener?.(new MessageEvent('message', {
+      data: {
+        type: 'stationary.rhythm.updated',
+        state: {
+          schemaVersion: 1,
+          sessionId: 'session-live',
+          cycleId: 7,
+          phase: 'moveFirst',
+          sampledDurationMs: 27_438,
+          phaseStartedMonoMs: 28_438,
+          phaseDeadlineMonoMs: 28_478,
+          remainingMs: 40,
+          updatedAtMonoMs: 28_438,
+          earlyReleaseReason: null,
+        },
+      },
+    })))
+
+    expect(screen.getByText('下轮攻击前剩余')).toBeVisible()
+    expect(screen.getByText('完成左右移动和稳定等待后才会进入下一轮攻击')).toBeVisible()
+  })
+
   it('asks for the current facing before starting and cancel sends no start intent', async () => {
     const user = userEvent.setup()
     render(<StationaryAttackPage />)
