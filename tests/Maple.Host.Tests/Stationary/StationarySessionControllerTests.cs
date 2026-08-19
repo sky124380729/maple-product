@@ -16,7 +16,7 @@ public sealed class StationarySessionControllerTests
         var publisher = new RecordingPublisher();
         var scheduler = new AdvancingScheduler();
         var random = new SequenceRandomSource(16, 27_438, 123, 47, 87, 101);
-        StationaryAttackConfig config = StationaryAttackConfig.Default with { RestEnabled = false };
+        StationaryAttackConfig config = TestConfig() with { RestEnabled = false };
         var controller = CreateController(actions, publisher, scheduler, random, config);
 
         await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, CancellationToken.None);
@@ -54,7 +54,7 @@ public sealed class StationarySessionControllerTests
             publisher,
             new AdvancingScheduler(),
             new SequenceRandomSource(16, 20_001, 80, 30, 81, 80),
-            StationaryAttackConfig.Default with { RestEnabled = false });
+            TestConfig() with { RestEnabled = false });
 
         await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, CancellationToken.None);
 
@@ -72,7 +72,7 @@ public sealed class StationarySessionControllerTests
             new RecordingPublisher(),
             new AdvancingScheduler(),
             new SequenceRandomSource(16, 27_438, 80, 30, 81, 80),
-            StationaryAttackConfig.Default with { RestEnabled = false });
+            TestConfig() with { RestEnabled = false });
 
         await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, CancellationToken.None);
 
@@ -92,7 +92,7 @@ public sealed class StationarySessionControllerTests
             actions,
             new RejectAfterFirstCheckGate(),
             scheduler,
-            new FixedConfigProvider(StationaryAttackConfig.Default with { RestEnabled = false }),
+            new FixedConfigProvider(TestConfig() with { RestEnabled = false }),
             new WeightedAttackDurationSampler(random),
             new StationaryMovementPlanner(random),
             new AlwaysAttackTriggerStrategy(),
@@ -113,6 +113,7 @@ public sealed class StationarySessionControllerTests
         StationaryAttackConfig first = StationaryAttackConfig.Default with
         {
             AttackBands = FixedBands(1_000),
+            MaxLateralMoveMs = 200,
             MoveHoldMinMs = 80,
             MoveHoldMaxMs = 80,
             MoveGapMinMs = 30,
@@ -205,6 +206,20 @@ public sealed class StationarySessionControllerTests
         new AttackBand(durationMs, durationMs, 25),
         new AttackBand(durationMs, durationMs, 25)
     ];
+
+    private static StationaryAttackConfig TestConfig() => StationaryAttackConfig.Default with
+    {
+        AttackBands =
+        [
+            new AttackBand(1_000, 10_000, 5),
+            new AttackBand(10_000, 20_000, 10),
+            new AttackBand(20_000, 40_000, 60),
+            new AttackBand(40_000, 60_000, 25)
+        ],
+        MaxLateralMoveMs = 250,
+        MoveHoldMinMs = 80,
+        MoveHoldMaxMs = 125
+    };
 
     private static StationarySessionController CreateController(
         RecordingActionSink actions,

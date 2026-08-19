@@ -14,6 +14,32 @@ public sealed class StationaryConfigValidatorTests
     }
 
     [Fact]
+    public void Default_configuration_uses_the_verified_stationary_parameters()
+    {
+        StationaryAttackConfig config = StationaryAttackConfig.Default;
+
+        Assert.Equal(
+            [
+                new AttackBand(1_000, 10_000, 97),
+                new AttackBand(10_000, 20_000, 1),
+                new AttackBand(20_000, 40_000, 1),
+                new AttackBand(40_000, 60_000, 1)
+            ],
+            config.AttackBands);
+        Assert.Equal(80, config.MaxLateralMoveMs);
+        Assert.Equal(30, config.MoveHoldMinMs);
+        Assert.Equal(50, config.MoveHoldMaxMs);
+        Assert.Equal(30, config.MoveGapMinMs);
+        Assert.Equal(120, config.MoveGapMaxMs);
+        Assert.Equal(80, config.StabilizeMinMs);
+        Assert.Equal(150, config.StabilizeMaxMs);
+        Assert.True(config.RestEnabled);
+        Assert.Equal(50, config.RestProbabilityPercent);
+        Assert.Equal(2_000, config.RestMinMs);
+        Assert.Equal(5_000, config.RestMaxMs);
+    }
+
+    [Fact]
     public void Rejects_attack_duration_above_product_limit()
     {
         AttackBand[] bands = StationaryAttackConfig.Default.AttackBands.ToArray();

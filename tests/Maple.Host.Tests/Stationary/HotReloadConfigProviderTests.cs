@@ -34,6 +34,7 @@ public sealed class HotReloadConfigProviderTests
         StationaryAttackConfig updated = StationaryAttackConfig.Default with
         {
             AttackKey = "Space",
+            MaxLateralMoveMs = 140,
             MoveHoldMinMs = 90,
             MoveHoldMaxMs = 140
         };

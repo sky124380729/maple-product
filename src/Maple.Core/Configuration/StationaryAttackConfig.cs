@@ -23,20 +23,20 @@ public sealed record StationaryAttackConfig
     public string AttackKey { get; init; } = "Ctrl";
     public IReadOnlyList<AttackBand> AttackBands { get; init; } =
     [
-        new(1_000, 10_000, 5),
-        new(10_000, 20_000, 10),
-        new(20_000, 40_000, 60),
-        new(40_000, 60_000, 25)
+        new(1_000, 10_000, 97),
+        new(10_000, 20_000, 1),
+        new(20_000, 40_000, 1),
+        new(40_000, 60_000, 1)
     ];
-    public int MaxLateralMoveMs { get; init; } = 250;
-    public int MoveHoldMinMs { get; init; } = 80;
-    public int MoveHoldMaxMs { get; init; } = 125;
+    public int MaxLateralMoveMs { get; init; } = 80;
+    public int MoveHoldMinMs { get; init; } = 30;
+    public int MoveHoldMaxMs { get; init; } = 50;
     public int MoveGapMinMs { get; init; } = 30;
     public int MoveGapMaxMs { get; init; } = 120;
     public int StabilizeMinMs { get; init; } = 80;
     public int StabilizeMaxMs { get; init; } = 150;
     public bool RestEnabled { get; init; } = true;
-    public int RestProbabilityPercent { get; init; } = 25;
+    public int RestProbabilityPercent { get; init; } = 50;
     public int RestMinMs { get; init; } = 2_000;
     public int RestMaxMs { get; init; } = 5_000;
     public AttackTriggerMode AttackTriggerMode { get; init; } = AttackTriggerMode.Always;

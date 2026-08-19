@@ -12,7 +12,7 @@ public sealed class StationaryMovementPlannerTests
         var planner = new StationaryMovementPlanner(new SequenceRandomSource(123, 47, 87, 101));
         planner.StartSession(MovementDirection.Left);
 
-        MovementPlan plan = planner.CreatePlan(StationaryAttackConfig.Default);
+        MovementPlan plan = planner.CreatePlan(TestConfig());
 
         Assert.Equal(MovementDirection.Right, plan.First.Direction);
         Assert.Equal(123, plan.First.HoldMs);
@@ -29,7 +29,7 @@ public sealed class StationaryMovementPlannerTests
         var planner = new StationaryMovementPlanner(new SequenceRandomSource(100, 30, 90, 80));
         planner.StartSession(MovementDirection.Right);
 
-        MovementPlan plan = planner.CreatePlan(StationaryAttackConfig.Default);
+        MovementPlan plan = planner.CreatePlan(TestConfig());
 
         Assert.Equal(MovementDirection.Left, plan.First.Direction);
         Assert.Equal(MovementDirection.Right, plan.Second.Direction);
@@ -41,7 +41,7 @@ public sealed class StationaryMovementPlannerTests
     {
         var planner = new StationaryMovementPlanner(new SequenceRandomSource(120, 30, 80, 80));
         planner.StartSession(MovementDirection.Right);
-        MovementPlan plan = planner.CreatePlan(StationaryAttackConfig.Default);
+        MovementPlan plan = planner.CreatePlan(TestConfig());
         planner.ApplyCompletedPlan(plan);
 
         Assert.Equal(-40, planner.RelativeOffsetMs);
@@ -57,7 +57,7 @@ public sealed class StationaryMovementPlannerTests
         planner.StartSession(MovementDirection.Right, relativeOffsetMs: -230);
 
         InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
-            () => planner.CreatePlan(StationaryAttackConfig.Default));
+            () => planner.CreatePlan(TestConfig()));
 
         Assert.Equal("INITIAL_FACING_BUDGET_EXHAUSTED", exception.Message);
     }
@@ -69,7 +69,7 @@ public sealed class StationaryMovementPlannerTests
         planner.StartSession(MovementDirection.Left, relativeOffsetMs: -300);
 
         InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
-            () => planner.CreatePlan(StationaryAttackConfig.Default));
+            () => planner.CreatePlan(TestConfig()));
 
         Assert.Equal("MOVEMENT_BUDGET_EXHAUSTED", exception.Message);
     }
@@ -85,4 +85,11 @@ public sealed class StationaryMovementPlannerTests
             return value;
         }
     }
+
+    private static StationaryAttackConfig TestConfig() => StationaryAttackConfig.Default with
+    {
+        MaxLateralMoveMs = 250,
+        MoveHoldMinMs = 80,
+        MoveHoldMaxMs = 125
+    };
 }

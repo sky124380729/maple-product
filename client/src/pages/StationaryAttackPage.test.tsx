@@ -39,7 +39,7 @@ describe('StationaryAttackPage', () => {
     expect(screen.getByText('攻击时长分段')).toBeVisible()
     expect(screen.getByLabelText('分段 1 最小值')).toHaveValue('1000')
     expect(screen.getByLabelText('分段 2 最大值')).toHaveValue('20000')
-    expect(screen.getByLabelText('分段 3 权重')).toHaveValue('60')
+    expect(screen.getByLabelText('分段 3 权重')).toHaveValue('1')
     expect(screen.getByLabelText('分段 4 最大值')).toHaveValue('60000')
   })
 

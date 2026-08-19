@@ -19,7 +19,7 @@ public sealed class WeightedAttackDurationSamplerTests
         var random = new SequenceRandomSource(roll, duration);
         var sampler = new WeightedAttackDurationSampler(random);
 
-        AttackDurationSample sample = sampler.Sample(StationaryAttackConfig.Default.AttackBands);
+        AttackDurationSample sample = sampler.Sample(TestBands());
 
         Assert.Equal(expectedBand, sample.BandIndex);
         Assert.Equal(duration, sample.DurationMs);
@@ -30,7 +30,7 @@ public sealed class WeightedAttackDurationSamplerTests
     {
         var sampler = new WeightedAttackDurationSampler(new SequenceRandomSource(16, 27_438));
 
-        AttackDurationSample sample = sampler.Sample(StationaryAttackConfig.Default.AttackBands);
+        AttackDurationSample sample = sampler.Sample(TestBands());
 
         Assert.Equal(27_438, sample.DurationMs);
     }
@@ -46,4 +46,12 @@ public sealed class WeightedAttackDurationSamplerTests
             return value;
         }
     }
+
+    private static AttackBand[] TestBands() =>
+    [
+        new(1_000, 10_000, 5),
+        new(10_000, 20_000, 10),
+        new(20_000, 40_000, 60),
+        new(40_000, 60_000, 25)
+    ];
 }
