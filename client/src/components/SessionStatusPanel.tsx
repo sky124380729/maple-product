@@ -70,6 +70,9 @@ export function SessionStatusPanel({ state }: { state: SessionState }) {
 }
 
 function stopReasonMessage(reason: string): string {
+  if (reason.startsWith('FOCUS_LOST:')) {
+    return '游戏窗口失去前台，已安全停止输入。请保持游戏窗口为当前前台窗口后重新开始。'
+  }
   const messages: Record<string, string> = {
     FOCUS_LOST: '游戏窗口失去前台，已安全停止输入。请保持游戏窗口为当前前台窗口后重新开始。',
     WINDOW_IDENTITY_CHANGED: '游戏窗口身份发生变化，已安全停止输入。请重新开始。',

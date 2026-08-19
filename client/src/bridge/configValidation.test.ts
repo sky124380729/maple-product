@@ -59,4 +59,9 @@ describe('hostErrorMessage', () => {
     expect(hostErrorMessage('BROKER_START_FAILED:UnauthorizedAccessException'))
       .toBe('输入服务启动失败，请确认已允许管理员授权后重试')
   })
+
+  it('maps focus diagnostics with a foreground handle to the focus-loss message', () => {
+    expect(hostErrorMessage('FOCUS_LOST:foreground=1182182'))
+      .toBe('游戏窗口失去前台，已安全停止输入；请保持游戏窗口为当前前台窗口后重新开始')
+  })
 })

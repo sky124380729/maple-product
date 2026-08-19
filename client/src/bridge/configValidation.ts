@@ -81,6 +81,9 @@ export function hostErrorMessage(code: string): string {
   if (code.startsWith('BROKER_START_FAILED:')) {
     return '输入服务启动失败，请确认已允许管理员授权后重试'
   }
+  if (code.startsWith('FOCUS_LOST:')) {
+    return '游戏窗口失去前台，已安全停止输入；请保持游戏窗口为当前前台窗口后重新开始'
+  }
   const messages: Record<string, string> = {
     CONFIG_INVALID: '配置未通过校验，请检查标红字段',
     TARGET_NOT_FOUND: '未检测到正在运行的冒险岛怀旧服客户端',
