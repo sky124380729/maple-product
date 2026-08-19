@@ -42,7 +42,7 @@ export function SessionStatusPanel({ state }: { state: SessionState }) {
       </div>
 
       {state.error && <Alert type="error" showIcon title="运行异常" description={state.error} />}
-      {state.stopReason && <Alert type="info" showIcon title="会话已停止" description={state.stopReason} />}
+      {state.stopReason && <Alert type="info" showIcon title="会话已停止" description={stopReasonMessage(state.stopReason)} />}
 
       <div className="countdown-block" aria-live="polite">
         <Typography.Text className="countdown-label">本阶段剩余</Typography.Text>
@@ -67,4 +67,13 @@ export function SessionStatusPanel({ state }: { state: SessionState }) {
       </Space>
     </section>
   )
+}
+
+function stopReasonMessage(reason: string): string {
+  const messages: Record<string, string> = {
+    FOCUS_LOST: '游戏窗口失去前台，已安全停止输入。请保持游戏窗口为当前前台窗口后重新开始。',
+    WINDOW_IDENTITY_CHANGED: '游戏窗口身份发生变化，已安全停止输入。请重新开始。',
+    BROKER_HEARTBEAT_IO: '输入服务心跳失败，已安全停止输入。请重新开始。',
+  }
+  return messages[reason] ?? reason
 }

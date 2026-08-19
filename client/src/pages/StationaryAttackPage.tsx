@@ -160,7 +160,7 @@ export function StationaryAttackPage() {
           type="info"
           showIcon
           title="输入安全边界"
-          description="开始后会自动定位并校验目标窗口。失焦会立即停止且不会自动恢复。"
+          description="开始后会自动定位并校验目标窗口。运行期间请保持游戏窗口为当前前台窗口；失焦会立即停止且不会自动恢复。"
         />
 
         {configWarning && <Alert className="config-message" type="warning" showIcon title="配置加载提示" description={configWarning} />}
