@@ -40,6 +40,7 @@
 - [ ] 每次动作检查前台窗口、目标身份、心跳和动作租约。
 - [ ] 失焦静默停止；Broker/释放/窗口身份/运行时异常发送一次 Windows 系统通知。
 - [ ] Broker watchdog 在 Host 失联或心跳超时后释放全部按键。
+- [ ] 动作租约到期只释放活动键而不解除目标；随后幂等 `KeyUp` 成功，控制器可以进入左右移动。
 - [ ] `ReleaseAll/Close` 在失焦、最小化或身份变化时仍执行安全释放，不被目标窗口安全门拒绝。
 - [ ] Broker 映射测试证明 `Ctrl` 使用 `VK_CONTROL + scan 0x1D`，白名单字母使用 Set-1 扫描码，左右方向键使用扫描码和 extended flag；真实游戏输入不得使用零扫描码的攻击键。
 - [ ] Windows 实机记录 Broker 事件、真实 keybd_event 结果和游戏画面响应。

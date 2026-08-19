@@ -91,7 +91,10 @@ public sealed class BrokerInputSession(
             bool heartbeatExpired = armed && clock.NowMonoMs - lastHeartbeatMonoMs > heartbeatTimeoutMs;
             bool leaseExpired = active.Values.Any(item => clock.NowMonoMs > item.LeaseDeadlineMonoMs);
             bool targetInvalid = armedTarget is not null && !targetSafety.Evaluate(armedTarget).Success;
-            if (heartbeatExpired || leaseExpired || targetInvalid)
+            if (leaseExpired)
+                ReleaseAll();
+
+            if (heartbeatExpired || targetInvalid)
             {
                 ReleaseAll();
                 armed = false;

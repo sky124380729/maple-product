@@ -86,6 +86,28 @@ public sealed class BrokerInputSessionTests
     }
 
     [Fact]
+    public async Task Expired_action_lease_releases_the_key_without_disarming_the_target()
+    {
+        var sender = new RecordingKeySender();
+        var clock = new FakeClock();
+        var session = new BrokerInputSession(sender, clock, new AlwaysSafeTarget(), 2_000);
+        session.Arm(Target(), "secret");
+        await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.Attack, "Ctrl", 100));
+
+        clock.NowMonoMs = 101;
+        await session.CheckWatchdogAsync();
+        BrokerResponse keyUp = await session.HandleAsync(
+            Request(2, BrokerCommandKind.KeyUp, BrokerLogicalAction.Attack, "Ctrl", 0));
+        BrokerResponse move = await session.HandleAsync(
+            Request(3, BrokerCommandKind.KeyDown, BrokerLogicalAction.MoveLeft, "Left", 100));
+
+        Assert.True(keyUp.Accepted);
+        Assert.Equal("KEY_ALREADY_UP", keyUp.Code);
+        Assert.True(move.Accepted);
+        Assert.Equal(["Down:Ctrl", "Up:Ctrl", "Down:Left"], sender.Events);
+    }
+
+    [Fact]
     public async Task Rejects_and_releases_when_target_identity_is_no_longer_valid()
     {
         var sender = new RecordingKeySender();
