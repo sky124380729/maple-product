@@ -25,6 +25,10 @@ Windows keybd_event
 
 核心控制器不直接调用 Win32 输入；所有输入必须经过 BrokerClient 和安全门。React 不产生随机值，也不决定何时释放按键。
 
+Windows 发布基线为 Windows 10 22H2 x64 或 Windows 11 x64。Windows Host 使用 `net8.0-windows10.0.19041.0` 目标框架并在启动时执行系统版本门检查；低于产品基线时拒绝启动自动攻击。
+
+窗口匹配配置为规范化后的目标 exe 完整路径。Host 只枚举该路径对应的可见顶层窗口；零候选或多候选均返回显式错误。选定候选后绑定 HWND、PID、规范化路径和进程启动时间，任何一项变化都使会话失效。
+
 ## 2. 状态机
 
 状态必须是显式枚举，禁止用多个布尔值拼接：
@@ -137,6 +141,10 @@ IAttackTriggerStrategy.ShouldAttack(ObservationContext context)
 ```
 
 校验要求：权重总和 100；所有范围为正且 min 不大于 max；攻击最大值不超过 60,000ms；移动抽样不能越过会话阈值；disabled 的 `monsterInRange` 不能启动。
+
+配置另包含 `targetExecutablePath`。它必须是用户通过 Host 原生文件选择器确认的绝对 `.exe` 路径，保存前进行路径规范化；React 不自行解析或猜测路径。
+
+`attackKey` 只允许 `Ctrl`、`Shift`、`Space`、`A`、`S`、`D`、`F`、`Z`、`X`、`C`、`V`。该列表由 Core 契约定义并被 UI 和 Broker 复用；未知键必须在保存、启动和 Broker 动作校验三处拒绝。
 
 ## 8. 倒计时消息
 

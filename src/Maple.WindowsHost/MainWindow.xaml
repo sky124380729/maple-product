@@ -1,0 +1,14 @@
+<Window x:Class="Maple.WindowsHost.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="Maple Product"
+        Width="1180"
+        Height="760"
+        MinWidth="760"
+        MinHeight="560"
+        WindowStartupLocation="CenterScreen">
+    <Grid Background="#EEF2F1">
+        <wv2:WebView2 x:Name="ClientBrowser" />
+    </Grid>
+</Window>
