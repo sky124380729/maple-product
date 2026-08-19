@@ -12,6 +12,7 @@ public interface IBrokerConnection : IStationaryActionSink, IBrokerLeaseProbe, I
     long LastSequence => 0;
     void SetAttackKey(string key);
     void MarkUnhealthy() { }
+    void MarkUnhealthy(string code) => MarkUnhealthy();
     Task<InputActionResult> HeartbeatAsync(CancellationToken cancellationToken);
 }
 
@@ -23,6 +24,7 @@ public sealed class NamedPipeBrokerClient : IBrokerConnection
     private long sequence;
     private int disposed;
     private int faulted;
+    private string faultCode = "BROKER_UNAVAILABLE";
     private string attackKey = "Ctrl";
 
     private NamedPipeBrokerClient(NamedPipeClientStream pipe, Guid sessionId)
@@ -34,7 +36,12 @@ public sealed class NamedPipeBrokerClient : IBrokerConnection
     public Guid SessionId => sessionId;
     public long LastSequence => Interlocked.Read(ref sequence);
     public bool IsHealthy => Volatile.Read(ref disposed) == 0 && Volatile.Read(ref faulted) == 0 && pipe.IsConnected;
-    public void MarkUnhealthy() => Volatile.Write(ref faulted, 1);
+    public void MarkUnhealthy() => MarkUnhealthy("BROKER_UNAVAILABLE");
+    public void MarkUnhealthy(string code)
+    {
+        faultCode = string.IsNullOrWhiteSpace(code) ? "BROKER_UNAVAILABLE" : code;
+        Volatile.Write(ref faulted, 1);
+    }
     public void SetAttackKey(string key) => attackKey = key;
 
     public static async Task<NamedPipeBrokerClient> ConnectAsync(
@@ -110,14 +117,14 @@ public sealed class NamedPipeBrokerClient : IBrokerConnection
         CancellationToken cancellationToken,
         bool allowWhenUnhealthy = false)
     {
-        if (!allowWhenUnhealthy && !IsHealthy) return InputActionResult.Fail("BROKER_UNAVAILABLE");
+        if (!allowWhenUnhealthy && !IsHealthy) return InputActionResult.Fail(faultCode);
         bool lockTaken = false;
         try
         {
             await ioLock.WaitAsync(cancellationToken);
             lockTaken = true;
             return !allowWhenUnhealthy && !IsHealthy
-                ? InputActionResult.Fail("BROKER_UNAVAILABLE")
+                ? InputActionResult.Fail(faultCode)
                 : await SendCoreAsync(kind, action, key, leaseMs, cancellationToken);
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or OperationCanceledException or ObjectDisposedException)

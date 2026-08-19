@@ -75,7 +75,9 @@ public sealed class BrokerHeartbeatLoopTests
             HeartbeatCompleted.TrySetResult();
             return Task.FromResult(InputActionResult.Fail("HEARTBEAT_REJECTED"));
         }
-        public void MarkUnhealthy() => IsHealthy = false;
+        public string? FailureCode { get; private set; }
+        public void MarkUnhealthy() => MarkUnhealthy("BROKER_UNAVAILABLE");
+        public void MarkUnhealthy(string code) { FailureCode = code; IsHealthy = false; }
         public Task<InputActionResult> ReleaseAllAsync(CancellationToken cancellationToken)
         {
             ReleaseCount++;

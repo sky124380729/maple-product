@@ -100,7 +100,7 @@ public sealed class BrokerHeartbeatLoop(IBrokerConnection connection) : IAsyncDi
                 {
                     InputActionResult heartbeat = await connection.HeartbeatAsync(cancellation.Token);
                     if (heartbeat.Success) continue;
-                    connection.MarkUnhealthy();
+                    connection.MarkUnhealthy(heartbeat.Code);
                     await connection.ReleaseAllAsync(CancellationToken.None);
                     break;
                 }
@@ -110,7 +110,7 @@ public sealed class BrokerHeartbeatLoop(IBrokerConnection connection) : IAsyncDi
                 }
                 catch
                 {
-                    connection.MarkUnhealthy();
+                    connection.MarkUnhealthy("BROKER_HEARTBEAT_IO");
                     try { await connection.ReleaseAllAsync(CancellationToken.None); } catch { }
                     break;
                 }
