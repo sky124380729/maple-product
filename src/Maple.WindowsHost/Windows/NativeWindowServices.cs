@@ -126,11 +126,11 @@ public sealed class NativeWindowIdentityProbe : IWindowIdentityProbe
             string path = NativeProcessIdentity.ReadExecutablePath((int)pid);
             long started = new DateTimeOffset(process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds();
             var identity = new WindowIdentity(hwndValue, (int)pid, path, started);
-            return Task.FromResult(new WindowProbeResult(identity, GetForegroundWindow().ToInt64(), IsIconic(hwnd), true));
+            return Task.FromResult(new WindowProbeResult(identity, RootWindow(GetForegroundWindow()).ToInt64(), IsIconic(hwnd), true));
         }
         catch
         {
-            return Task.FromResult(new WindowProbeResult(null, GetForegroundWindow().ToInt64(), IsIconic(hwnd), true));
+            return Task.FromResult(new WindowProbeResult(null, RootWindow(GetForegroundWindow()).ToInt64(), IsIconic(hwnd), true));
         }
     }
 
@@ -141,7 +141,11 @@ public sealed class NativeWindowIdentityProbe : IWindowIdentityProbe
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+    [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr hwnd);
+
+    private static IntPtr RootWindow(IntPtr hwnd) => GetAncestor(hwnd, 2) is var root && root != IntPtr.Zero ? root : hwnd;
 }
 
 internal static class NativeProcessIdentity

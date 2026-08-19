@@ -89,9 +89,9 @@ internal sealed class ProcessTargetSafetyGate : IBrokerTargetSafetyGate
             return BrokerTargetSafetyResult.Rejected("WINDOW_IDENTITY_CHANGED");
         if (ProcessTargetIdentityProbe.IsMinimized(target.Hwnd))
             return BrokerTargetSafetyResult.Rejected("WINDOW_MINIMIZED");
-        return ProcessTargetIdentityProbe.IsForeground(target.Hwnd)
+        return ProcessTargetIdentityProbe.IsForeground(target)
             ? BrokerTargetSafetyResult.Allowed()
-            : BrokerTargetSafetyResult.Rejected("FOCUS_LOST");
+            : BrokerTargetSafetyResult.Rejected($"FOCUS_LOST:foreground={ProcessTargetIdentityProbe.ForegroundWindow()}");
     }
 }
 
@@ -133,7 +133,10 @@ internal static class ProcessTargetIdentityProbe
         finally { CloseHandle(process); }
     }
 
-    public static bool IsForeground(long hwnd) => GetForegroundWindow().ToInt64() == hwnd;
+    public static bool IsForeground(BrokerTargetIdentity target) =>
+        RootWindow(GetForegroundWindow()).ToInt64() == target.Hwnd;
+
+    public static long ForegroundWindow() => RootWindow(GetForegroundWindow()).ToInt64();
     public static bool IsMinimized(long hwnd) => IsIconic(new IntPtr(hwnd));
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -146,7 +149,12 @@ internal static class ProcessTargetIdentityProbe
     private static extern IntPtr GetForegroundWindow();
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr hwnd);
+
+    private static IntPtr RootWindow(IntPtr hwnd) => GetAncestor(hwnd, 2) is var root && root != IntPtr.Zero ? root : hwnd;
 
     [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, int processId);
