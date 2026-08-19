@@ -29,26 +29,51 @@ public sealed class WindowsBrokerProcessLauncher(string brokerExecutablePath) : 
                 "--started", target.ProcessStartedAtUnixMs)
         };
 
+        Process? brokerProcess = null;
         try
         {
-            Process.Start(startInfo);
+            brokerProcess = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("BROKER_PROCESS_NOT_STARTED");
             NamedPipeBrokerClient connection = await NamedPipeBrokerClient.ConnectAsync(
                 pipeName,
                 secret,
                 target,
                 sessionId,
                 cancellationToken);
+            brokerProcess.Dispose();
+            brokerProcess = null;
             return BrokerLaunchResult.Started(connection);
         }
         catch (OperationCanceledException)
         {
+            TryTerminate(brokerProcess);
             return BrokerLaunchResult.Failed("BROKER_START_CANCELLED");
         }
-        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException or TimeoutException)
         {
-            return BrokerLaunchResult.Failed("BROKER_START_FAILED:" + exception.GetType().Name);
+            TryTerminate(brokerProcess);
+            return BrokerLaunchResult.Failed(StartupFailureCode(exception));
         }
     }
 
+    public static string StartupFailureCode(Exception exception) =>
+        "BROKER_START_FAILED:" + exception.GetType().Name;
+
     private static string Quote(object value) => "\"" + value.ToString()!.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+
+    private static void TryTerminate(Process? process)
+    {
+        if (process is null) return;
+        try
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
 }

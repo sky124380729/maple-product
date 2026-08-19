@@ -1,8 +1,6 @@
-using System.Text.RegularExpressions;
-
 namespace Maple.Core.Configuration;
 
-public static partial class StationaryConfigValidator
+public static class StationaryConfigValidator
 {
     public static ConfigValidationResult Validate(StationaryAttackConfig config)
     {
@@ -11,15 +9,15 @@ public static partial class StationaryConfigValidator
         if (config.SchemaVersion != StationaryAttackConfig.SchemaVersionCurrent)
             Add("schemaVersion", "SCHEMA_VERSION_UNSUPPORTED");
         if (string.IsNullOrWhiteSpace(config.Source)) Add("source", "SOURCE_REQUIRED");
-        if (!IsWindowsExecutablePath(config.TargetExecutablePath))
-            Add("targetExecutablePath", "TARGET_EXECUTABLE_PATH_INVALID");
         if (!StationaryAttackConfig.AllowedAttackKeys.Contains(config.AttackKey))
             Add("attackKey", "ATTACK_KEY_NOT_ALLOWED");
-        if (config.AttackBands.Count == 0) Add("attackBands", "ATTACK_BANDS_REQUIRED");
-        if (config.AttackBands.Sum(band => band.Weight) != 100)
+        IReadOnlyList<AttackBand>? attackBands = config.AttackBands;
+        if (attackBands is null || attackBands.Count != 4)
+            Add("attackBands", "ATTACK_BANDS_REQUIRED");
+        if (attackBands is not null && attackBands.Sum(band => band.Weight) != 100)
             Add("attackBands", "ATTACK_WEIGHT_TOTAL");
 
-        foreach (AttackBand band in config.AttackBands)
+        foreach (AttackBand band in attackBands ?? [])
         {
             if (band.MinMs <= 0 || band.MaxMs < band.MinMs || band.Weight <= 0)
                 Add("attackBands", "ATTACK_BAND_INVALID");
@@ -46,12 +44,4 @@ public static partial class StationaryConfigValidator
             if (minimum <= 0 || maximum < minimum) Add(field, "RANGE_INVALID");
         }
     }
-
-    private static bool IsWindowsExecutablePath(string path) =>
-        !string.IsNullOrWhiteSpace(path) &&
-        path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
-        (DrivePathRegex().IsMatch(path) || path.StartsWith(@"\\", StringComparison.Ordinal));
-
-    [GeneratedRegex("^[A-Za-z]:[\\\\/]")]
-    private static partial Regex DrivePathRegex();
 }

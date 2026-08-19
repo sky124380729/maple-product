@@ -9,7 +9,9 @@ namespace Maple.Host.Broker;
 public interface IBrokerConnection : IStationaryActionSink, IBrokerLeaseProbe, IAsyncDisposable
 {
     Guid SessionId { get; }
+    long LastSequence => 0;
     void SetAttackKey(string key);
+    void MarkUnhealthy() { }
     Task<InputActionResult> HeartbeatAsync(CancellationToken cancellationToken);
 }
 
@@ -20,6 +22,7 @@ public sealed class NamedPipeBrokerClient : IBrokerConnection
     private readonly SemaphoreSlim ioLock = new(1, 1);
     private long sequence;
     private int disposed;
+    private int faulted;
     private string attackKey = "Ctrl";
 
     private NamedPipeBrokerClient(NamedPipeClientStream pipe, Guid sessionId)
@@ -29,7 +32,9 @@ public sealed class NamedPipeBrokerClient : IBrokerConnection
     }
 
     public Guid SessionId => sessionId;
-    public bool IsHealthy => Volatile.Read(ref disposed) == 0 && pipe.IsConnected;
+    public long LastSequence => Interlocked.Read(ref sequence);
+    public bool IsHealthy => Volatile.Read(ref disposed) == 0 && Volatile.Read(ref faulted) == 0 && pipe.IsConnected;
+    public void MarkUnhealthy() => Volatile.Write(ref faulted, 1);
     public void SetAttackKey(string key) => attackKey = key;
 
     public static async Task<NamedPipeBrokerClient> ConnectAsync(
@@ -66,7 +71,7 @@ public sealed class NamedPipeBrokerClient : IBrokerConnection
         SendAsync(BrokerCommandKind.KeyUp, action, KeyFor(action), 0, cancellationToken);
 
     public Task<InputActionResult> ReleaseAllAsync(CancellationToken cancellationToken) =>
-        SendAsync(BrokerCommandKind.ReleaseAll, null, null, 0, cancellationToken);
+        SendAsync(BrokerCommandKind.ReleaseAll, null, null, 0, cancellationToken, allowWhenUnhealthy: true);
 
     public Task<InputActionResult> HeartbeatAsync(CancellationToken cancellationToken) =>
         SendAsync(BrokerCommandKind.Heartbeat, null, null, 0, cancellationToken);
@@ -76,14 +81,25 @@ public sealed class NamedPipeBrokerClient : IBrokerConnection
         if (Interlocked.Exchange(ref disposed, 1) != 0) return;
         try
         {
-            if (pipe.IsConnected)
+            await ioLock.WaitAsync(CancellationToken.None);
+            try
             {
-                await SendAsync(BrokerCommandKind.Close, null, null, 0, CancellationToken.None);
+                if (pipe.IsConnected)
+                {
+                    await SendCoreAsync(BrokerCommandKind.Close, null, null, 0, CancellationToken.None);
+                }
+            }
+            finally
+            {
+                ioLock.Release();
             }
         }
         catch { }
-        pipe.Dispose();
-        ioLock.Dispose();
+        finally
+        {
+            pipe.Dispose();
+            ioLock.Dispose();
+        }
     }
 
     private async Task<InputActionResult> SendAsync(
@@ -91,37 +107,52 @@ public sealed class NamedPipeBrokerClient : IBrokerConnection
         StationaryInputAction? action,
         string? key,
         int leaseMs,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowWhenUnhealthy = false)
     {
-        if (!IsHealthy) return InputActionResult.Fail("BROKER_UNAVAILABLE");
-        long next = Interlocked.Increment(ref sequence);
-        await ioLock.WaitAsync(cancellationToken);
+        if (!allowWhenUnhealthy && !IsHealthy) return InputActionResult.Fail("BROKER_UNAVAILABLE");
+        bool lockTaken = false;
         try
         {
-            await BrokerWireCodec.WriteAsync(
-                pipe,
-                new BrokerRequest(
-                    BrokerProtocol.Version,
-                    next,
-                    sessionId,
-                    kind,
-                    ToLogicalAction(action),
-                    key,
-                    leaseMs),
-                cancellationToken);
-            BrokerResponse? response = await BrokerWireCodec.ReadAsync<BrokerResponse>(pipe, cancellationToken);
-            return response is { Accepted: true }
-                ? InputActionResult.Ok(response.Code)
-                : InputActionResult.Fail(response?.Code ?? "BROKER_RESPONSE_INVALID");
+            await ioLock.WaitAsync(cancellationToken);
+            lockTaken = true;
+            return !allowWhenUnhealthy && !IsHealthy
+                ? InputActionResult.Fail("BROKER_UNAVAILABLE")
+                : await SendCoreAsync(kind, action, key, leaseMs, cancellationToken);
         }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or OperationCanceledException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or OperationCanceledException or ObjectDisposedException)
         {
             return InputActionResult.Fail("BROKER_IO:" + exception.GetType().Name);
         }
         finally
         {
-            ioLock.Release();
+            if (lockTaken) ioLock.Release();
         }
+    }
+
+    private async Task<InputActionResult> SendCoreAsync(
+        BrokerCommandKind kind,
+        StationaryInputAction? action,
+        string? key,
+        int leaseMs,
+        CancellationToken cancellationToken)
+    {
+        long next = Interlocked.Increment(ref sequence);
+        await BrokerWireCodec.WriteAsync(
+            pipe,
+            new BrokerRequest(
+                BrokerProtocol.Version,
+                next,
+                sessionId,
+                kind,
+                ToLogicalAction(action),
+                key,
+                leaseMs),
+            cancellationToken);
+        BrokerResponse? response = await BrokerWireCodec.ReadAsync<BrokerResponse>(pipe, cancellationToken);
+        return response is { Accepted: true }
+            ? InputActionResult.Ok(response.Code)
+            : InputActionResult.Fail(response?.Code ?? "BROKER_RESPONSE_INVALID");
     }
 
     private string KeyFor(StationaryInputAction action) => action switch

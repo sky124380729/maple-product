@@ -7,46 +7,71 @@ namespace Maple.Core.Tests.Movement;
 public sealed class StationaryMovementPlannerTests
 {
     [Fact]
-    public void Produces_opposite_directions_with_independent_durations()
+    public void Facing_left_moves_right_then_left_with_independent_durations()
     {
-        var planner = new StationaryMovementPlanner(new SequenceRandomSource(0, 123, 47, 87, 101));
-        planner.StartSession();
+        var planner = new StationaryMovementPlanner(new SequenceRandomSource(123, 47, 87, 101));
+        planner.StartSession(MovementDirection.Left);
+
+        MovementPlan plan = planner.CreatePlan(StationaryAttackConfig.Default);
+
+        Assert.Equal(MovementDirection.Right, plan.First.Direction);
+        Assert.Equal(123, plan.First.HoldMs);
+        Assert.Equal(MovementDirection.Left, plan.Second.Direction);
+        Assert.Equal(87, plan.Second.HoldMs);
+        Assert.Equal(47, plan.GapMs);
+        Assert.Equal(101, plan.StabilizeMs);
+        Assert.Equal(36, plan.ProjectedOffsetMs);
+    }
+
+    [Fact]
+    public void Facing_right_moves_left_then_right()
+    {
+        var planner = new StationaryMovementPlanner(new SequenceRandomSource(100, 30, 90, 80));
+        planner.StartSession(MovementDirection.Right);
 
         MovementPlan plan = planner.CreatePlan(StationaryAttackConfig.Default);
 
         Assert.Equal(MovementDirection.Left, plan.First.Direction);
-        Assert.Equal(123, plan.First.HoldMs);
         Assert.Equal(MovementDirection.Right, plan.Second.Direction);
-        Assert.Equal(87, plan.Second.HoldMs);
-        Assert.Equal(47, plan.GapMs);
-        Assert.Equal(101, plan.StabilizeMs);
-        Assert.Equal(-36, plan.ProjectedOffsetMs);
+        Assert.Equal(-10, plan.ProjectedOffsetMs);
     }
 
     [Fact]
     public void Keeps_offset_across_cycles_and_resets_only_for_a_new_session()
     {
-        var planner = new StationaryMovementPlanner(new SequenceRandomSource(0, 120, 30, 80, 80));
-        planner.StartSession();
+        var planner = new StationaryMovementPlanner(new SequenceRandomSource(120, 30, 80, 80));
+        planner.StartSession(MovementDirection.Right);
         MovementPlan plan = planner.CreatePlan(StationaryAttackConfig.Default);
         planner.ApplyCompletedPlan(plan);
 
         Assert.Equal(-40, planner.RelativeOffsetMs);
 
-        planner.StartSession();
+        planner.StartSession(MovementDirection.Left);
         Assert.Equal(0, planner.RelativeOffsetMs);
     }
 
     [Fact]
-    public void Never_selects_a_direction_without_minimum_remaining_budget()
+    public void Does_not_swap_the_required_order_when_the_first_direction_has_no_budget()
     {
-        var planner = new StationaryMovementPlanner(new SequenceRandomSource(100, 30, 80, 80));
-        planner.StartSession(relativeOffsetMs: 230);
+        var planner = new StationaryMovementPlanner(new SequenceRandomSource());
+        planner.StartSession(MovementDirection.Right, relativeOffsetMs: -230);
 
-        MovementPlan plan = planner.CreatePlan(StationaryAttackConfig.Default);
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+            () => planner.CreatePlan(StationaryAttackConfig.Default));
 
-        Assert.Equal(MovementDirection.Left, plan.First.Direction);
-        Assert.InRange(plan.ProjectedOffsetMs, -250, 250);
+        Assert.Equal("INITIAL_FACING_BUDGET_EXHAUSTED", exception.Message);
+    }
+
+    [Fact]
+    public void Stops_instead_of_shortening_the_second_hold_below_the_configured_minimum()
+    {
+        var planner = new StationaryMovementPlanner(new SequenceRandomSource(80, 30, 30, 80));
+        planner.StartSession(MovementDirection.Left, relativeOffsetMs: -300);
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+            () => planner.CreatePlan(StationaryAttackConfig.Default));
+
+        Assert.Equal("MOVEMENT_BUDGET_EXHAUSTED", exception.Message);
     }
 
     private sealed class SequenceRandomSource(params int[] values) : IRandomSource

@@ -1,9 +1,9 @@
 import type { StationaryAttackConfig } from './types'
 
 type BridgeCommand =
-  | { command: 'chooseTargetExecutable' }
+  | { command: 'loadConfig' }
   | { command: 'saveConfig'; config: StationaryAttackConfig }
-  | { command: 'startStationary'; config: StationaryAttackConfig }
+  | { command: 'startStationary'; config: StationaryAttackConfig; initialFacing: 'left' | 'right' }
   | { command: 'stopStationary' }
   | { command: 'openPreview' }
 

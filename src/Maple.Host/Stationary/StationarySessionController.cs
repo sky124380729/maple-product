@@ -17,9 +17,13 @@ public sealed class StationarySessionController(
     IRandomSource random,
     IStationaryStatePublisher publisher)
 {
-    public async Task RunAsync(Guid sessionId, int? cycleLimit, CancellationToken cancellationToken)
+    public async Task RunAsync(
+        Guid sessionId,
+        MovementDirection initialFacing,
+        int? cycleLimit,
+        CancellationToken cancellationToken)
     {
-        movementPlanner.StartSession();
+        movementPlanner.StartSession(initialFacing);
         long cycleId = 0;
         string? stopReason = null;
 
@@ -42,6 +46,7 @@ public sealed class StationarySessionController(
                     StationaryPhase.AttackHolding,
                     StationaryInputAction.Attack,
                     attack.DurationMs,
+                    attack.DurationMs,
                     cancellationToken);
 
                 MovementPlan movement = movementPlanner.CreatePlan(config);
@@ -51,22 +56,24 @@ public sealed class StationarySessionController(
                     StationaryPhase.MoveFirst,
                     ToInputAction(movement.First.Direction),
                     movement.First.HoldMs,
+                    attack.DurationMs,
                     cancellationToken);
-                await DelayPhaseAsync(sessionId, cycleId, StationaryPhase.MoveGap, movement.GapMs, cancellationToken);
+                await DelayPhaseAsync(sessionId, cycleId, StationaryPhase.MoveGap, movement.GapMs, attack.DurationMs, cancellationToken);
                 await HoldAsync(
                     sessionId,
                     cycleId,
                     StationaryPhase.MoveSecond,
                     ToInputAction(movement.Second.Direction),
                     movement.Second.HoldMs,
+                    attack.DurationMs,
                     cancellationToken);
                 movementPlanner.ApplyCompletedPlan(movement);
-                await DelayPhaseAsync(sessionId, cycleId, StationaryPhase.Stabilizing, movement.StabilizeMs, cancellationToken);
+                await DelayPhaseAsync(sessionId, cycleId, StationaryPhase.Stabilizing, movement.StabilizeMs, attack.DurationMs, cancellationToken);
 
                 if (config.RestEnabled && random.NextInclusive(1, 100) <= config.RestProbabilityPercent)
                 {
                     int restMs = random.NextInclusive(config.RestMinMs, config.RestMaxMs);
-                    await DelayPhaseAsync(sessionId, cycleId, StationaryPhase.Resting, restMs, cancellationToken);
+                    await DelayPhaseAsync(sessionId, cycleId, StationaryPhase.Resting, restMs, attack.DurationMs, cancellationToken);
                 }
             }
         }
@@ -78,6 +85,11 @@ public sealed class StationarySessionController(
         {
             stopReason = exception.Code;
         }
+        catch (InvalidOperationException exception) when (
+            exception.Message.EndsWith("BUDGET_EXHAUSTED", StringComparison.Ordinal))
+        {
+            stopReason = exception.Message;
+        }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             stopReason = "RUNTIME_EXCEPTION:" + exception.GetType().Name;
@@ -86,7 +98,7 @@ public sealed class StationarySessionController(
         {
             InputActionResult release = await actions.ReleaseAllAsync(CancellationToken.None);
             if (!release.Success) stopReason = release.Code;
-            Publish(sessionId, cycleId, StationaryPhase.Stopped, 0, stopReason);
+            Publish(sessionId, cycleId, StationaryPhase.Stopped, 0, 0, stopReason);
         }
     }
 
@@ -96,18 +108,19 @@ public sealed class StationarySessionController(
         StationaryPhase phase,
         StationaryInputAction action,
         int holdMs,
+        int sampledAttackDurationMs,
         CancellationToken cancellationToken)
     {
         SafetyCheckResult gate = await safety.CheckAsync(cancellationToken);
         if (!gate.Success) throw new SessionStopException(gate.Code);
 
-        Publish(sessionId, cycleId, phase, holdMs, null);
+        Publish(sessionId, cycleId, phase, holdMs, sampledAttackDurationMs, null);
         InputActionResult down = await actions.KeyDownAsync(action, holdMs, cancellationToken);
         if (!down.Success) throw new SessionStopException(down.Code);
 
         try
         {
-            await scheduler.DelayAsync(holdMs, cancellationToken);
+            await DelayWithSafetyChecksAsync(holdMs, cancellationToken);
         }
         finally
         {
@@ -121,10 +134,26 @@ public sealed class StationarySessionController(
         long cycleId,
         StationaryPhase phase,
         int durationMs,
+        int sampledAttackDurationMs,
         CancellationToken cancellationToken)
     {
-        Publish(sessionId, cycleId, phase, durationMs, null);
-        await scheduler.DelayAsync(durationMs, cancellationToken);
+        Publish(sessionId, cycleId, phase, durationMs, sampledAttackDurationMs, null);
+        await DelayWithSafetyChecksAsync(durationMs, cancellationToken);
+    }
+
+    private async Task DelayWithSafetyChecksAsync(int durationMs, CancellationToken cancellationToken)
+    {
+        const int safetyPollMs = 100;
+        int remaining = durationMs;
+        while (remaining > 0)
+        {
+            int slice = Math.Min(safetyPollMs, remaining);
+            await scheduler.DelayAsync(slice, cancellationToken);
+            remaining -= slice;
+            if (remaining == 0) continue;
+            SafetyCheckResult gate = await safety.CheckAsync(cancellationToken);
+            if (!gate.Success) throw new SessionStopException(gate.Code);
+        }
     }
 
     private void Publish(
@@ -132,6 +161,7 @@ public sealed class StationarySessionController(
         long cycleId,
         StationaryPhase phase,
         int durationMs,
+        int sampledAttackDurationMs,
         string? earlyReleaseReason)
     {
         long start = scheduler.NowMonoMs;
@@ -140,7 +170,7 @@ public sealed class StationarySessionController(
             sessionId,
             cycleId,
             phase,
-            durationMs,
+            sampledAttackDurationMs,
             start,
             start + durationMs,
             durationMs,

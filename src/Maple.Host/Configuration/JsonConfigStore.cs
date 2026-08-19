@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Maple.Core.Configuration;
 
 namespace Maple.Host.Configuration;
@@ -13,11 +14,18 @@ public sealed record ConfigLoadResult(StationaryAttackConfig Config, string? War
 
 public sealed class JsonConfigStore(string path)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+
+    private static JsonSerializerOptions CreateJsonOptions()
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true
-    };
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            WriteIndented = true
+        };
+        options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        return options;
+    }
 
     public async Task<ConfigStoreResult> SaveAsync(
         StationaryAttackConfig config,

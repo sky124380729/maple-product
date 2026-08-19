@@ -1,39 +1,53 @@
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using Maple.Host.Windows;
 
 namespace Maple.WindowsHost.Windows;
 
 public sealed class NativeWindowLocator : IWindowLocator
 {
-    public Task<IReadOnlyList<WindowIdentity>> FindByExecutablePathAsync(
-        string executablePath,
+    public Task<IReadOnlyList<WindowIdentity>> FindRunningMapleClientsAsync(
         CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows()) return Task.FromResult<IReadOnlyList<WindowIdentity>>([]);
-        string normalized = Path.GetFullPath(executablePath);
         var matches = new List<WindowIdentity>();
         EnumWindows((hwnd, _) =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return true;
+            if (cancellationToken.IsCancellationRequested) return false;
+            if (!MapleClientWindowFingerprint.Matches(
+                    IsWindowVisible(hwnd),
+                    ReadWindowText(hwnd),
+                    ReadClassName(hwnd))) return true;
             GetWindowThreadProcessId(hwnd, out uint pid);
             if (pid == 0) return true;
             try
             {
                 using Process process = Process.GetProcessById((int)pid);
-                string path = process.MainModule?.FileName ?? string.Empty;
-                if (string.Equals(Path.GetFullPath(path), normalized, StringComparison.OrdinalIgnoreCase))
-                {
-                    long started = new DateTimeOffset(process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds();
-                    matches.Add(new WindowIdentity(hwnd.ToInt64(), (int)pid, path, started));
-                }
+                string path = NativeProcessIdentity.ReadExecutablePath((int)pid);
+                long started = new DateTimeOffset(process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds();
+                matches.Add(new WindowIdentity(hwnd.ToInt64(), (int)pid, path, started));
             }
             catch { }
             return true;
         }, IntPtr.Zero);
+        cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult<IReadOnlyList<WindowIdentity>>(matches);
+    }
+
+    private static string ReadWindowText(IntPtr hwnd)
+    {
+        int length = GetWindowTextLength(hwnd);
+        if (length <= 0) return string.Empty;
+        var value = new StringBuilder(length + 1);
+        return GetWindowText(hwnd, value, value.Capacity) > 0 ? value.ToString() : string.Empty;
+    }
+
+    private static string ReadClassName(IntPtr hwnd)
+    {
+        var value = new StringBuilder(256);
+        return GetClassName(hwnd, value, value.Capacity) > 0 ? value.ToString() : string.Empty;
     }
 
     private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
@@ -47,21 +61,37 @@ public sealed class NativeWindowLocator : IWindowLocator
     [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr hwnd);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hwnd, StringBuilder value, int maximum);
+
+    [DllImport("user32.dll")]
+    private static extern int GetWindowTextLength(IntPtr hwnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hwnd, StringBuilder value, int maximum);
+
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
 }
 
 public sealed class NativeForegroundSession : IForegroundSession
 {
-    public Task<ForegroundResult> ActivateAndVerifyAsync(WindowIdentity target, CancellationToken cancellationToken)
+    public async Task<ForegroundResult> ActivateAndVerifyAsync(WindowIdentity target, CancellationToken cancellationToken)
     {
-        if (!OperatingSystem.IsWindows()) return Task.FromResult(ForegroundResult.Rejected("WINDOWS_REQUIRED"));
+        if (!OperatingSystem.IsWindows()) return ForegroundResult.Rejected("WINDOWS_REQUIRED");
         IntPtr hwnd = new(target.Hwnd);
+        if (GetForegroundWindow() == hwnd && !IsIconic(hwnd)) return ForegroundResult.Allowed();
         if (IsIconic(hwnd)) ShowWindow(hwnd, ShowWindowCommand.Restore);
-        if (!SetForegroundWindow(hwnd)) return Task.FromResult(ForegroundResult.Rejected("FOREGROUND_SWITCH_FAILED"));
-        return Task.FromResult(GetForegroundWindow() == hwnd && !IsIconic(hwnd)
-            ? ForegroundResult.Allowed()
-            : ForegroundResult.Rejected("FOREGROUND_VERIFY_FAILED"));
+
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _ = SetForegroundWindow(hwnd);
+            if (GetForegroundWindow() == hwnd && !IsIconic(hwnd)) return ForegroundResult.Allowed();
+            await Task.Delay(50, cancellationToken);
+        }
+
+        return ForegroundResult.Rejected("FOREGROUND_VERIFY_FAILED");
     }
 
     [DllImport("user32.dll")]
@@ -93,7 +123,7 @@ public sealed class NativeWindowIdentityProbe : IWindowIdentityProbe
         try
         {
             using Process process = Process.GetProcessById((int)pid);
-            string path = process.MainModule?.FileName ?? string.Empty;
+            string path = NativeProcessIdentity.ReadExecutablePath((int)pid);
             long started = new DateTimeOffset(process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds();
             var identity = new WindowIdentity(hwndValue, (int)pid, path, started);
             return Task.FromResult(new WindowProbeResult(identity, GetForegroundWindow().ToInt64(), IsIconic(hwnd), true));
@@ -112,4 +142,42 @@ public sealed class NativeWindowIdentityProbe : IWindowIdentityProbe
     private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr hwnd);
+}
+
+internal static class NativeProcessIdentity
+{
+    private const uint ProcessQueryLimitedInformation = 0x1000;
+
+    public static string ReadExecutablePath(int processId)
+    {
+        IntPtr process = OpenProcess(ProcessQueryLimitedInformation, false, processId);
+        if (process == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+        try
+        {
+            var path = new System.Text.StringBuilder(32_768);
+            int length = path.Capacity;
+            if (!QueryFullProcessImageName(process, 0, path, ref length))
+                throw new System.ComponentModel.Win32Exception();
+            return Path.GetFullPath(path.ToString());
+        }
+        finally
+        {
+            CloseHandle(process);
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, int processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageName(
+        IntPtr process,
+        int flags,
+        System.Text.StringBuilder executableName,
+        ref int size);
+
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
 }

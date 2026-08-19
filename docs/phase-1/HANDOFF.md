@@ -27,8 +27,8 @@
 ## 3. 已确认的产品决策
 
 - 最低发布目标为 Windows 10 22H2 x64，同时支持 Windows 11 x64。
-- 目标游戏通过 Host 原生文件选择器选择 exe。
-- 后续窗口定位只按规范化完整 exe 路径进行。零候选或多候选都停止，不发送输入。
+- 目标游戏不要求用户选择 exe；Host 按窗口标题 `冒险岛怀旧服` 和窗口类 `UnityWndClass` 自动发现唯一运行中的客户端。
+- 零候选或异常多候选都停止，不发送输入；唯一候选绑定 HWND、PID、实际进程路径和进程启动时间。
 - 窗口会话身份绑定 HWND、PID、规范化进程路径和进程启动时间。
 - 攻击键白名单为 `Ctrl`、`Shift`、`Space`、`A`、`S`、`D`、`F`、`Z`、`X`、`C`、`V`，默认 `Ctrl`。
 - 攻击持续时间硬上限为 `60,000ms`。
@@ -80,29 +80,19 @@
 ### Maple.WindowsHost
 
 - Windows x64 WPF + WebView2 外壳。
-- 原生 exe 选择器。
-- 原生顶层窗口枚举、完整路径匹配、前台激活和身份校验。
+- 原生顶层窗口枚举、精确窗口指纹匹配、前台激活和身份校验。
 - 独立原生预览窗口边界。
 
-## 5. 明确未完成项
+## 5. 当前完成状态
 
-按继续开发优先级排列：
+原交接项 1–8、11–15 已完成：真实 WGC 独立预览、通知/日志/异常终止、启动配置恢复、四段编辑、周期边界热更新、组合发布、Broker Close/heartbeat 生命周期、预览单例、项目文件清理及前端跨字段校验均已有实现和自动化测试。
 
-1. 独立预览窗口目前只是占位文字，尚未接入 `Windows.Graphics.Capture`，没有真实画面、FPS、frame age 或 dropped frames。
-2. `WindowsSystemNotificationSink` 已存在，但没有接入会话异常停止流程。
-3. 尚无结构化会话日志。
-4. 尚未持久化上次异常终止记录，也没有在下次启动时展示。
-5. `JsonConfigStore.LoadAsync` 已存在，但 WindowsHost 启动时没有把已保存配置发给 React。
-6. React 不能编辑四个攻击时长分段和权重，因此未满足“所有一期调试参数可编辑”。
-7. 运行中保存配置不会在下一完整周期切换。当前控制器使用启动时的固定 `ValidatedConfigProvider`。
-8. Host/Broker 发布打包未完成。WindowsHost 运行时假设 `Maple.InputBroker.exe` 与 Host 位于同一目录。
-9. Windows 实机验证尚未开始，包括 UAC、ACL、`keybd_event` 游戏响应、失焦、身份变化、watchdog、通知和长时间运行。
-10. Windows 10 22H2 和 Windows 11 的启动门实机证据未记录。
-11. `NamedPipeBrokerClient.DisposeAsync` 先把 `disposed` 置为 1，再调用经过 `IsHealthy` 检查的 `SendAsync(Close)`，因此 `Close` 实际不会发送。当前 Host 会先显式 `ReleaseAll`，Broker watchdog 也是兜底，但此处仍应修正并补测试。
-12. 主窗口关闭时需要复核 heartbeat loop 的释放顺序。当前关闭处理取消会话并直接 dispose connection，没有显式等待 heartbeat loop dispose。
-13. `PreviewWindowHost` 在每次 bridge 命令中被新建，当前窗口复用字段不能跨命令持久化，可能允许重复打开多个预览窗口。
-14. `Maple.WindowsHost.csproj` 中 `client/dist` Content Include 重复，应清理后再做正式发布。
-15. React 表单目前主要依赖字段级 required/min/max，跨字段范围、权重总和等完整错误仍由 Host 拒绝，前端错误映射可以进一步细化。
+仍需人工完成的仅是不可由自动化构建替代的 Windows 实机验收：
+
+- UAC、命名管道 ACL 与真实 `keybd_event` 游戏画面响应。
+- 失焦、身份变化、watchdog、系统通知及长时间运行。
+- WGC 真实画面、FPS、frame age 与 dropped frames。
+- Windows 10 22H2 启动门；本机 Windows 11 启动门和窗口发现已有部分证据。
 
 ## 6. 已有测试覆盖
 
@@ -113,15 +103,11 @@
 
 本交接提交前的最新验证结果记录在第 9 节。macOS 测试和交叉编译不能替代 Windows 实机证据。
 
-## 7. 推荐继续开发顺序
+## 7. 后续验收顺序
 
-1. 修复 Broker dispose/Close、heartbeat 关闭顺序和预览单例生命周期，并补回归测试。
-2. 完成配置启动加载、攻击分段编辑和跨字段校验。
-3. 增加可热更新的配置 provider，确保新配置只在下一完整周期生效。
-4. 接入结构化日志、异常终止记录和系统通知。
-5. 实现独立原生采集预览及 FPS/frame-age 诊断，保证预览故障不影响攻击会话。
-6. 完成 Host + Broker + client 静态资源的 win-x64 发布目录或 ZIP。
-7. 在 Windows 10 22H2 x64 和 Windows 11 x64 执行 `docs/PHASE_1_ACCEPTANCE.md` 的 D/E 项，保存脱敏证据到 `docs/phase-1/evidence/`。
+1. 从前台 Host 点击开始并允许 UAC，核对 Broker 握手和真实游戏响应。
+2. 完成失焦、身份变化、watchdog、通知、预览和长时间运行实测。
+3. 在 Windows 10 22H2 x64 补启动门证据，并把脱敏结果写入 `docs/phase-1/evidence/`。
 
 ## 8. 开发和验证命令
 

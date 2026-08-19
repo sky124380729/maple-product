@@ -45,7 +45,7 @@ export interface StationaryAttackConfig {
   restProbabilityPercent: number
   restMinMs: number
   restMaxMs: number
-  attackTriggerMode: 'always'
+  attackTriggerMode: 'always' | 'monsterInRange'
 }
 
 export const safeDefaults: StationaryAttackConfig = {

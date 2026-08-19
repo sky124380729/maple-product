@@ -18,7 +18,8 @@ public sealed record StationaryAttackConfig
     public int SchemaVersion { get; init; } = SchemaVersionCurrent;
     public string Source { get; init; } = "safe-default";
     public DateTimeOffset UpdatedAtUtc { get; init; } = DateTimeOffset.UnixEpoch;
-    public string TargetExecutablePath { get; init; } = @"C:\Games\MapleStory.exe";
+    // Retained only so existing schema-v1 configuration files remain readable.
+    public string TargetExecutablePath { get; init; } = string.Empty;
     public string AttackKey { get; init; } = "Ctrl";
     public IReadOnlyList<AttackBand> AttackBands { get; init; } =
     [

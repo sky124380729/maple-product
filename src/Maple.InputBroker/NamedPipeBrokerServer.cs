@@ -1,8 +1,10 @@
 using System.IO.Pipes;
+using System.Runtime.Versioning;
 using Maple.Core.Broker;
 
 namespace Maple.InputBroker;
 
+[SupportedOSPlatform("windows")]
 public sealed class NamedPipeBrokerServer
 {
     public async Task RunAsync(
@@ -11,12 +13,15 @@ public sealed class NamedPipeBrokerServer
         BrokerTargetIdentity target,
         CancellationToken cancellationToken)
     {
-        await using var pipe = new NamedPipeServerStream(
+        await using var pipe = NamedPipeServerStreamAcl.Create(
             pipeName,
             PipeDirection.InOut,
             1,
             PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            PipeOptions.Asynchronous,
+            inBufferSize: 0,
+            outBufferSize: 0,
+            BrokerPipeSecurity.CreateForCurrentUser());
         await pipe.WaitForConnectionAsync(cancellationToken);
 
         var handshakeValidator = new BrokerHandshakeValidator(secret);
@@ -80,9 +85,13 @@ internal sealed class ProcessTargetSafetyGate : IBrokerTargetSafetyGate
     public BrokerTargetSafetyResult Evaluate(BrokerTargetIdentity target)
     {
         if (!OperatingSystem.IsWindows()) return BrokerTargetSafetyResult.Rejected("WINDOWS_REQUIRED");
-        return ProcessTargetIdentityProbe.Matches(target)
+        if (!ProcessTargetIdentityProbe.Matches(target))
+            return BrokerTargetSafetyResult.Rejected("WINDOW_IDENTITY_CHANGED");
+        if (ProcessTargetIdentityProbe.IsMinimized(target.Hwnd))
+            return BrokerTargetSafetyResult.Rejected("WINDOW_MINIMIZED");
+        return ProcessTargetIdentityProbe.IsForeground(target.Hwnd)
             ? BrokerTargetSafetyResult.Allowed()
-            : BrokerTargetSafetyResult.Rejected("WINDOW_IDENTITY_CHANGED");
+            : BrokerTargetSafetyResult.Rejected("FOCUS_LOST");
     }
 }
 
@@ -92,8 +101,12 @@ internal static class ProcessTargetIdentityProbe
     {
         try
         {
+            IntPtr hwnd = new(target.Hwnd);
+            if (!IsWindow(hwnd)) return false;
+            GetWindowThreadProcessId(hwnd, out uint hwndProcessId);
+            if (hwndProcessId != target.ProcessId) return false;
             using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(target.ProcessId);
-            string path = process.MainModule?.FileName ?? string.Empty;
+            string path = ReadExecutablePath(target.ProcessId);
             long started = new DateTimeOffset(process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds();
             return string.Equals(Path.GetFullPath(path), Path.GetFullPath(target.ProcessPath), StringComparison.OrdinalIgnoreCase) &&
                    started == target.ProcessStartedAtUnixMs;
@@ -103,4 +116,50 @@ internal static class ProcessTargetIdentityProbe
             return false;
         }
     }
+
+    private static string ReadExecutablePath(int processId)
+    {
+        const uint processQueryLimitedInformation = 0x1000;
+        IntPtr process = OpenProcess(processQueryLimitedInformation, false, processId);
+        if (process == IntPtr.Zero) return string.Empty;
+        try
+        {
+            var path = new System.Text.StringBuilder(32_768);
+            int length = path.Capacity;
+            return QueryFullProcessImageName(process, 0, path, ref length)
+                ? Path.GetFullPath(path.ToString())
+                : string.Empty;
+        }
+        finally { CloseHandle(process); }
+    }
+
+    public static bool IsForeground(long hwnd) => GetForegroundWindow().ToInt64() == hwnd;
+    public static bool IsMinimized(long hwnd) => IsIconic(new IntPtr(hwnd));
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr hwnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hwnd);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, int processId);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageName(
+        IntPtr process,
+        int flags,
+        System.Text.StringBuilder executableName,
+        ref int size);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
 }

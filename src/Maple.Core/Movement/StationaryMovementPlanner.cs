@@ -21,25 +21,32 @@ public sealed record MovementPlan(
 public sealed class StationaryMovementPlanner(IRandomSource random)
 {
     public int RelativeOffsetMs { get; private set; }
+    public MovementDirection InitialFacing { get; private set; }
 
-    public void StartSession(int relativeOffsetMs = 0) => RelativeOffsetMs = relativeOffsetMs;
+    public void StartSession(MovementDirection initialFacing, int relativeOffsetMs = 0)
+    {
+        InitialFacing = initialFacing;
+        RelativeOffsetMs = relativeOffsetMs;
+    }
 
     public MovementPlan CreatePlan(StationaryAttackConfig config)
     {
-        bool canLeft = RemainingBudget(MovementDirection.Left, RelativeOffsetMs, config.MaxLateralMoveMs) >= config.MoveHoldMinMs;
-        bool canRight = RemainingBudget(MovementDirection.Right, RelativeOffsetMs, config.MaxLateralMoveMs) >= config.MoveHoldMinMs;
-        if (!canLeft && !canRight) throw new InvalidOperationException("No safe first movement direction is available.");
-
-        MovementDirection firstDirection = canLeft && canRight
-            ? (random.NextInclusive(0, 1) == 0 ? MovementDirection.Left : MovementDirection.Right)
-            : canLeft ? MovementDirection.Left : MovementDirection.Right;
-        int firstHold = SampleHold(firstDirection, RelativeOffsetMs, config);
-        int afterFirst = Apply(RelativeOffsetMs, firstDirection, firstHold);
-        int gap = random.NextInclusive(config.MoveGapMinMs, config.MoveGapMaxMs);
-        MovementDirection secondDirection = firstDirection == MovementDirection.Left
+        MovementDirection firstDirection = InitialFacing == MovementDirection.Left
             ? MovementDirection.Right
             : MovementDirection.Left;
-        int secondHold = SampleHold(secondDirection, afterFirst, config);
+        int firstHold = SampleHold(
+            firstDirection,
+            RelativeOffsetMs,
+            config,
+            "INITIAL_FACING_BUDGET_EXHAUSTED");
+        int afterFirst = Apply(RelativeOffsetMs, firstDirection, firstHold);
+        int gap = random.NextInclusive(config.MoveGapMinMs, config.MoveGapMaxMs);
+        MovementDirection secondDirection = InitialFacing;
+        int secondHold = SampleHold(
+            secondDirection,
+            afterFirst,
+            config,
+            "MOVEMENT_BUDGET_EXHAUSTED");
         int projected = Apply(afterFirst, secondDirection, secondHold);
         int stabilize = random.NextInclusive(config.StabilizeMinMs, config.StabilizeMaxMs);
         return new MovementPlan(
@@ -52,12 +59,15 @@ public sealed class StationaryMovementPlanner(IRandomSource random)
 
     public void ApplyCompletedPlan(MovementPlan plan) => RelativeOffsetMs = plan.ProjectedOffsetMs;
 
-    private int SampleHold(MovementDirection direction, int offset, StationaryAttackConfig config)
+    private int SampleHold(
+        MovementDirection direction,
+        int offset,
+        StationaryAttackConfig config,
+        string exhaustionCode)
     {
         int maximum = Math.Min(config.MoveHoldMaxMs, RemainingBudget(direction, offset, config.MaxLateralMoveMs));
-        if (maximum <= 0) throw new InvalidOperationException("No safe movement budget is available.");
-        int minimum = Math.Min(config.MoveHoldMinMs, maximum);
-        return random.NextInclusive(minimum, maximum);
+        if (maximum < config.MoveHoldMinMs) throw new InvalidOperationException(exhaustionCode);
+        return random.NextInclusive(config.MoveHoldMinMs, maximum);
     }
 
     private static int RemainingBudget(MovementDirection direction, int offset, int maximum) =>

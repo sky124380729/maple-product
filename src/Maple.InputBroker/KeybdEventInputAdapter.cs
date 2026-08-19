@@ -10,34 +10,35 @@ public sealed class KeybdEventInputAdapter : IBrokerKeySender
     public bool Send(string key, bool isKeyUp)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("keybd_event is Windows-only.");
-        if (!TryMap(key, out byte virtualKey, out bool extended)) return false;
+        if (!TryMap(key, out byte virtualKey, out byte scanCode, out bool extended)) return false;
         uint flags = (isKeyUp ? KeyEventFKeyUp : 0) | (extended ? KeyEventFExtendedKey : 0);
-        keybd_event(virtualKey, 0, flags, UIntPtr.Zero);
+        keybd_event(virtualKey, scanCode, flags, UIntPtr.Zero);
         return true;
     }
 
-    private static bool TryMap(string key, out byte virtualKey, out bool extended)
+    internal static bool TryMap(
+        string key,
+        out byte virtualKey,
+        out byte scanCode,
+        out bool extended)
     {
-        extended = false;
-        virtualKey = key.ToUpperInvariant() switch
+        (virtualKey, scanCode, extended) = key.ToUpperInvariant() switch
         {
-            "CTRL" => 0x11,
-            "SHIFT" => 0x10,
-            "SPACE" => 0x20,
-            "A" => 0x41,
-            "S" => 0x53,
-            "D" => 0x44,
-            "F" => 0x46,
-            "Z" => 0x5A,
-            "X" => 0x58,
-            "C" => 0x43,
-            "V" => 0x56,
-            "LEFT" => 0x25,
-            "RIGHT" => 0x27,
-            _ => 0
+            "CTRL" => ((byte)0x11, (byte)0x1D, false),
+            "SHIFT" => ((byte)0x10, (byte)0x2A, false),
+            "SPACE" => ((byte)0x20, (byte)0x39, false),
+            "A" => ((byte)0x41, (byte)0x1E, false),
+            "S" => ((byte)0x53, (byte)0x1F, false),
+            "D" => ((byte)0x44, (byte)0x20, false),
+            "F" => ((byte)0x46, (byte)0x21, false),
+            "Z" => ((byte)0x5A, (byte)0x2C, false),
+            "X" => ((byte)0x58, (byte)0x2D, false),
+            "C" => ((byte)0x43, (byte)0x2E, false),
+            "V" => ((byte)0x56, (byte)0x2F, false),
+            "LEFT" => ((byte)0x25, (byte)0x4B, true),
+            "RIGHT" => ((byte)0x27, (byte)0x4D, true),
+            _ => ((byte)0, (byte)0, false)
         };
-        extended = key.Equals("Left", StringComparison.OrdinalIgnoreCase) ||
-                   key.Equals("Right", StringComparison.OrdinalIgnoreCase);
         return virtualKey != 0;
     }
 
