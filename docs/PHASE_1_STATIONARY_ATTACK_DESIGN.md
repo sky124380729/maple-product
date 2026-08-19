@@ -31,6 +31,8 @@ Windows 发布基线为 Windows 10 22H2 x64 或 Windows 11 x64。Windows Host �
 
 Host 在启动 Broker 前先激活并校验目标；由于 UAC 可能改变前台窗口，Broker 握手成功后必须再次激活并校验同一目标，第二次失败时关闭 Broker 连接且不进入控制器。Broker 对 `KeyDown/KeyUp` 执行目标安全门，但 `ReleaseAll/Close` 必须无条件尝试释放活动键，不能因失焦或身份变化被拒绝。
 
+Input Broker 必须使用 Windows GUI 子系统并以隐藏窗口方式启动，不得创建可见控制台窗口。UAC 同意界面可以短暂出现，但握手完成后 Host 必须重新激活游戏；Broker 的启动、运行和退出都不得再改变前台窗口。
+
 ## 2. 状态机
 
 状态必须是显式枚举，禁止用多个布尔值拼接：

@@ -14,20 +14,7 @@ public sealed class WindowsBrokerProcessLauncher(string brokerExecutablePath) : 
         if (!OperatingSystem.IsWindows()) return BrokerLaunchResult.Failed("WINDOWS_REQUIRED");
         string pipeName = "maple-input-" + Guid.NewGuid().ToString("N");
         string secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = brokerExecutablePath,
-            UseShellExecute = true,
-            Verb = "runas",
-            Arguments = string.Join(
-                " ",
-                "--pipe", Quote(pipeName),
-                "--secret", Quote(secret),
-                "--hwnd", target.Hwnd,
-                "--pid", target.ProcessId,
-                "--path", Quote(target.ProcessPath),
-                "--started", target.ProcessStartedAtUnixMs)
-        };
+        ProcessStartInfo startInfo = CreateStartInfo(brokerExecutablePath, pipeName, secret, target);
 
         Process? brokerProcess = null;
         try
@@ -58,6 +45,28 @@ public sealed class WindowsBrokerProcessLauncher(string brokerExecutablePath) : 
 
     public static string StartupFailureCode(Exception exception) =>
         "BROKER_START_FAILED:" + exception.GetType().Name;
+
+    public static ProcessStartInfo CreateStartInfo(
+        string executablePath,
+        string pipeName,
+        string secret,
+        WindowIdentity target) =>
+        new()
+        {
+            FileName = executablePath,
+            UseShellExecute = true,
+            Verb = "runas",
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
+            Arguments = string.Join(
+                " ",
+                "--pipe", Quote(pipeName),
+                "--secret", Quote(secret),
+                "--hwnd", target.Hwnd,
+                "--pid", target.ProcessId,
+                "--path", Quote(target.ProcessPath),
+                "--started", target.ProcessStartedAtUnixMs)
+        };
 
     private static string Quote(object value) => "\"" + value.ToString()!.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
 
