@@ -8,7 +8,7 @@ public sealed class OcrHudRecognitionProviderTests
     [Fact]
     public async Task Combines_ocr_identity_and_numbers_with_visual_percentages()
     {
-        var ocr = new OrderedOcr(["LV. 43 猎人 Pink丶Bin", "1586/1586", "914/991", "EXP 90% (0.23%)"]);
+        var ocr = new OrderedOcr(["LV. 43 猎人 Pink丶Bin", "LV. 43", "Pink丶Bin", "1586/1586", "914/991", "EXP 90% (0.23%)"]);
         var pixels = new byte[1366 * 768 * 4];
         for (int x = 0; x < 100; x++)
         {
@@ -51,6 +51,29 @@ public sealed class OcrHudRecognitionProviderTests
         Assert.Equal("猎人", result.Hud.Job);
         Assert.Equal(1586, result.Hud.HpCurrent);
         Assert.Equal(991, result.Hud.MpMax);
+    }
+
+    [Fact]
+    public async Task Reads_split_identity_regions_on_standard_client_capture()
+    {
+        var ocr = new OrderedOcr([
+            "Pin14 、 引 0",
+            "LV. 43",
+            "Pink 、 Bin",
+            "1586/1586",
+            "914/991",
+            "EXP 43.47%"]);
+        var frame = new CapturedFrame(1352, 769, 1352 * 4,
+            new byte[1352 * 769 * 4], 1000, 1);
+
+        RecognitionAnalysis result = await new OcrHudRecognitionProvider(ocr).AnalyzeAsync(frame, CancellationToken.None);
+
+        Assert.Equal("Pink丶Bin", result.Hud.CharacterName);
+        Assert.Equal(43, result.Hud.Level);
+        Assert.Equal("猎人", result.Hud.Job);
+        Assert.Equal(1586, result.Hud.HpCurrent);
+        Assert.Equal(991, result.Hud.MpMax);
+        Assert.Equal(43.47, result.Hud.ExpPercent);
     }
 
     private sealed class OrderedOcr(IReadOnlyList<string> results) : IRegionTextRecognizer

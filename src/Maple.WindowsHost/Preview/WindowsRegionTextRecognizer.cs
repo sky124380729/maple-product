@@ -55,9 +55,12 @@ public sealed class WindowsRegionTextRecognizer : IRegionTextRecognizer
             using var stream = new InMemoryRandomAccessStream();
             using (var writer = new DataWriter(stream))
             {
-                bool identityRegion = region.Width >= frame.Width * 0.14
-                    || region.Width <= frame.Width * 0.07;
-                writer.WriteBytes(BuildBitmap(cropped, width, height, identityRegion ? 6 : 1,
+                bool identityRegion = region.Width >= frame.Width * 0.14;
+                // The standard 768p client renders the status row at roughly
+                // 30px high. Upscale every narrow HUD crop so OCR sees the
+                // same glyph size as the high-DPI capture.
+                int scale = identityRegion ? 6 : 4;
+                writer.WriteBytes(BuildBitmap(cropped, width, height, scale,
                     region.Width <= frame.Width * 0.07));
                 await writer.StoreAsync().AsTask(cancellationToken).ConfigureAwait(false);
                 await writer.FlushAsync().AsTask(cancellationToken).ConfigureAwait(false);

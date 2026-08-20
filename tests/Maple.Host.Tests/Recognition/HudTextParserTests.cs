@@ -43,6 +43,15 @@ public sealed class HudTextParserTests
     }
 
     [Fact]
+    public void Recovers_collapsed_resource_maximum()
+    {
+        HudResource resource = HudTextParser.ParseResource("MP [ 9 引 / 1 ]");
+
+        Assert.Equal(991, resource.Current);
+        Assert.Equal(991, resource.Maximum);
+    }
+
+    [Fact]
     public void Rejects_identity_text_when_level_marker_is_buried_in_chat_text()
     {
         HudIdentity identity = HudTextParser.ParseIdentity("逍遥大柜 出金 100R=300万金币 猎人 LV. 0");
@@ -97,12 +106,14 @@ public sealed class HudTextParserTests
         Assert.Equal(43, identity.Level);
         Assert.Equal("猎人", identity.Job);
         Assert.Equal("Pink丶Bin", identity.CharacterName);
+        Assert.Equal("Hello丶Ya", HudTextParser.ExtractLatinName("He110 、 Ya"));
     }
 
     [Theory]
     [InlineData("E)(P 30S 囤．23 氵引", 0.23)]
     [InlineData("EXP 90% (0.23%)", 0.23)]
     [InlineData("EXP .23", 0.23)]
+    [InlineData("EXP 301 [ 80．引 囿", 80.91)]
     public void Parses_experience_when_ocr_splits_fraction_or_percent(string text, double expected)
     {
         Assert.Equal(expected, HudTextParser.ParseExperience(text));

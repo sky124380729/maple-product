@@ -33,6 +33,15 @@ describe('StationaryAttackPage', () => {
     expect(screen.queryByLabelText('每侧最大累计偏移')).not.toBeInTheDocument()
   })
 
+  it('allows the lateral offset budget below the safe default', async () => {
+    const user = userEvent.setup()
+    render(<StationaryAttackPage />)
+
+    await user.click(screen.getByText('高级调试参数'))
+
+    expect(screen.getByLabelText('每侧最大累计偏移')).toHaveAttribute('aria-valuemin', '1')
+  })
+
   it('exposes all four attack duration bands as editable fields', () => {
     render(<StationaryAttackPage />)
 
@@ -99,7 +108,10 @@ describe('StationaryAttackPage', () => {
     expect(screen.getByText('猎人')).toBeVisible()
     expect(screen.getByText('1586 / 1586')).toBeVisible()
     expect(screen.getByText('914 / 991')).toBeVisible()
+    expect(screen.getByText('100%')).toBeVisible()
+    expect(screen.getByText('92%')).toBeVisible()
     expect(screen.getByText('0.23%')).toBeVisible()
+    expect(screen.getByRole('progressbar', { name: /EXP/ })).toHaveClass('recognition-exp-progress')
     expect(screen.getByText('42 ms')).toBeVisible()
   })
 

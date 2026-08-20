@@ -5,7 +5,7 @@ namespace Maple.Host.Tests.Recognition;
 public sealed class RecognitionBridgePublisherTests
 {
     [Fact]
-    public void Publishes_at_most_four_updates_per_second_and_maps_hud()
+    public void Suppresses_unchanged_hud_updates_but_publishes_changed_values()
     {
         var sent = new List<RecognitionBridgeMessage>();
         var publisher = new RecognitionBridgePublisher(sent.Add, minimumIntervalMs: 250);
@@ -13,7 +13,7 @@ public sealed class RecognitionBridgePublisherTests
 
         publisher.TryPublish(RecognitionSnapshot.Create("s", null, 1, 1000, 1010, hud, [], [], [], null), 1010);
         publisher.TryPublish(RecognitionSnapshot.Create("s", null, 2, 1020, 1100, hud, [], [], [], null), 1100);
-        publisher.TryPublish(RecognitionSnapshot.Create("s", null, 3, 1200, 1260, hud, [], [], [], null), 1260);
+        publisher.TryPublish(RecognitionSnapshot.Create("s", null, 3, 1200, 1260, hud with { MpCurrent = 900 }, [], [], [], null), 1260);
 
         Assert.Equal(2, sent.Count);
         Assert.Equal("recognition.snapshot", sent[0].Type);

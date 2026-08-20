@@ -4,13 +4,14 @@ import type { RecognitionSnapshotView } from '../bridge/types'
 
 export function RecognitionStatus({ snapshot }: { snapshot: RecognitionSnapshotView | null }) {
   const [elapsedMs, setElapsedMs] = useState(0)
+  const snapshotKey = snapshot == null ? 'none' : [snapshot.health, snapshot.faultCode, snapshot.hud.characterName, snapshot.hud.level, snapshot.hud.job, snapshot.hud.hpCurrent, snapshot.hud.hpMax, snapshot.hud.mpCurrent, snapshot.hud.mpMax, snapshot.hud.expPercent].join('|')
   useEffect(() => {
     setElapsedMs(0)
     if (!snapshot || snapshot.health !== 'running') return
     const startedAt = performance.now()
     const timer = window.setInterval(() => setElapsedMs(performance.now() - startedAt), 250)
     return () => window.clearInterval(timer)
-  }, [snapshot])
+  }, [snapshotKey, snapshot?.health])
   const hud = snapshot?.hud
   const frameAgeMs = snapshot ? Math.round(snapshot.frameAgeMs + elapsedMs) : null
   const health = snapshot?.health === 'running' && frameAgeMs != null && frameAgeMs > 500
@@ -40,6 +41,9 @@ export function RecognitionStatus({ snapshot }: { snapshot: RecognitionSnapshotV
         <Typography.Text type="secondary">置信度 {hud ? `${Math.round(hud.confidence * 100)}%` : '-'}</Typography.Text>
         <span className="recognition-age"><Typography.Text type="secondary">帧龄</Typography.Text><Typography.Text type="secondary">{frameAgeMs == null ? '-' : `${frameAgeMs} ms`}</Typography.Text></span>
       </div>
+      <div>
+        <Progress className="recognition-exp-progress" aria-label="EXP" percent={hud?.expPercent == null ? 0 : Math.round(Math.max(0, Math.min(100, hud.expPercent)))} showInfo={false} strokeColor="#d6ab2c" size="small" />
+      </div>
       {snapshot?.faultCode && <Typography.Text type="danger">{snapshot.faultCode}</Typography.Text>}
     </section>
   )
@@ -52,14 +56,14 @@ function ResourceRow({ label, current, maximum, ratio, color }: {
   ratio?: number | null
   color: string
 }) {
-  const percent = ratio == null ? 0 : Math.max(0, Math.min(100, ratio * 100))
+  const percent = ratio == null ? 0 : Math.round(Math.max(0, Math.min(100, ratio * 100)))
   return (
     <div className="resource-row">
       <div className="resource-copy">
         <Typography.Text strong>{label}</Typography.Text>
         <Typography.Text>{current == null || maximum == null ? '-' : `${current} / ${maximum}`}</Typography.Text>
       </div>
-      <Progress percent={percent} showInfo={ratio != null} size="small" strokeColor={color} />
+      <Progress percent={percent} status="normal" showInfo={ratio != null} size="small" strokeColor={color} />
     </div>
   )
 }

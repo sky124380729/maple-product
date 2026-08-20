@@ -1,5 +1,4 @@
-import { Alert, Button, Descriptions, Space, Statistic, Tag, Typography } from 'antd'
-import { EyeOutlined } from '@ant-design/icons'
+import { Alert, Descriptions, Statistic, Tag, Typography } from 'antd'
 import type { SessionState } from '../state/sessionReducer'
 import type { RecognitionSnapshotView } from '../bridge/types'
 import { RecognitionStatus } from './RecognitionStatus'
@@ -30,11 +29,9 @@ const nextPhaseLabels: Record<string, string> = {
 export function SessionStatusPanel({
   state,
   recognition,
-  onOpenPreview,
 }: {
   state: SessionState
   recognition: RecognitionSnapshotView | null
-  onOpenPreview: () => void
 }) {
   const remainingMs = useRhythmCountdown(state.rhythm)
   const phase = state.rhythm?.phase ?? 'idle'
@@ -77,12 +74,6 @@ export function SessionStatusPanel({
 
       <RecognitionStatus snapshot={recognition} />
 
-      <Space wrap>
-        <Button icon={<EyeOutlined />} onClick={onOpenPreview}>
-          打开实时预览
-        </Button>
-        <Typography.Text type="secondary">预览在独立原生窗口打开</Typography.Text>
-      </Space>
     </section>
   )
 }

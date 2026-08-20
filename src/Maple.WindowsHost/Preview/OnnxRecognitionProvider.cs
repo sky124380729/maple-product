@@ -28,12 +28,14 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
     private readonly RecognitionModelManifest manifest;
     private readonly InferenceSession session;
     private readonly RecognitionTargetStabilizer dropStabilizer = new();
+    private readonly SpriteSceneRecognizer? scene;
 
-    private OnnxRecognitionProvider(IRecognitionProvider hud, RecognitionModelManifest manifest, InferenceSession session)
+    private OnnxRecognitionProvider(IRecognitionProvider hud, RecognitionModelManifest manifest, InferenceSession session, SpriteSceneRecognizer? scene)
     {
         this.hud = hud;
         this.manifest = manifest;
         this.session = session;
+        this.scene = scene;
     }
 
     public static IRecognitionProvider TryCreate(IRecognitionProvider hud)
@@ -53,7 +55,7 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
             using FileStream stream = File.OpenRead(modelPath);
             string hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
             if (!string.Equals(hash, manifest.Sha256, StringComparison.OrdinalIgnoreCase)) return hud;
-            return new OnnxRecognitionProvider(hud, manifest, new InferenceSession(modelPath));
+            return new OnnxRecognitionProvider(hud, manifest, new InferenceSession(modelPath), SpriteSceneRecognizer.TryCreate(modelPath));
         }
         catch (Exception exception) when (exception is not OutOfMemoryException) { return hud; }
     }
@@ -65,12 +67,18 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
         var characters = new List<RecognitionTarget>();
         var monsters = new List<RecognitionTarget>();
         var drops = new List<RecognitionTarget>();
-        foreach (RecognitionTile tileInfo in RecognitionTileLayout.Build(frame.Width, frame.Height))
+        // The checkpoint was trained on complete game screenshots. A single
+        // full-frame pass avoids running eight overlapping inferences on every
+        // preview frame; the sprite fallback handles small targets separately.
+        IEnumerable<RecognitionTile> tiles = [new RecognitionTile(0, 0, frame.Width, frame.Height)];
+        foreach (RecognitionTile tileInfo in tiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
             CapturedFrame tile = CapturedFrameCropper.Crop(frame, tileInfo.X, tileInfo.Y, tileInfo.Width, tileInfo.Height);
-            // The reference packaged detector consumes OpenCV BGR tensors.
-            float[] input = ToBgrNchw(tile, manifest.InputWidth, manifest.InputHeight);
+            // The packaged checkpoint is exported with RGB channel order.
+            // Feeding BGR suppresses mob scores to near zero on the real
+            // client frame, so keep the capture's RGB semantic order here.
+            float[] input = ToNchw(tile, manifest.InputWidth, manifest.InputHeight);
             var tensor = new DenseTensor<float>(input, [1, 3, manifest.InputHeight, manifest.InputWidth]);
             using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> outputs = session.Run(
                 [NamedOnnxValue.CreateFromTensor(inputName, tensor)]);
@@ -85,10 +93,14 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
                 manifest.NmsThreshold, manifest.InputWidth, manifest.InputHeight);
             AddDetections(detections, tileInfo.X, tileInfo.Y, tile, characters, monsters, drops);
         }
+        SceneRecognitionResult sceneResult = (scene is not null && (monsters.Count == 0 || characters.Count == 0))
+            ? scene.Analyze(frame)
+            : new SceneRecognitionResult(null, [], []);
         IReadOnlyList<RecognitionTarget> filteredCharacters = SuppressOverlaps(characters);
         RecognitionTarget? selfCandidate = filteredCharacters.OrderBy(item => Math.Abs((item.X + item.Width / 2) - frame.Width / 2d)).FirstOrDefault();
+        IEnumerable<RecognitionTarget> sceneMonsters = monsters.Count == 0 ? sceneResult.Monsters : [];
         IReadOnlyList<RecognitionTarget> filteredMonsters = SuppressOverlaps(
-            monsters.Where(item => RecognitionTargetFilter.IsPlausibleMonster(item, selfCandidate is null
+            monsters.Concat(sceneMonsters).Where(item => RecognitionTargetFilter.IsPlausibleMonster(item, selfCandidate is null
                 ? null
                 : new SelfObservation(selfCandidate.X, selfCandidate.Y, selfCandidate.Width,
                     selfCandidate.Height, null, selfCandidate.Confidence))).ToList());
@@ -100,11 +112,14 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
             .ToArray();
         IReadOnlyList<RecognitionTarget> filteredDrops = dropStabilizer.Update(
             SuppressOverlaps(plausibleDrops.ToList()), frame.Sequence);
-        SelfObservation? self = selfCandidate is null ? null : new SelfObservation(
-            selfCandidate.X, selfCandidate.Y, selfCandidate.Width, selfCandidate.Height, null, selfCandidate.Confidence);
-        IReadOnlyList<RecognitionTarget> otherPlayers = selfCandidate is null
-            ? []
-            : filteredCharacters.Where(item => !ReferenceEquals(item, selfCandidate)).Select(item => item with { Kind = "player" }).ToArray();
+        SelfObservation? self = selfCandidate is null
+            ? sceneResult.Self
+            : new SelfObservation(selfCandidate.X, selfCandidate.Y, selfCandidate.Width, selfCandidate.Height, null, selfCandidate.Confidence);
+        IReadOnlyList<RecognitionTarget> otherPlayers = filteredCharacters
+            .Where(item => !ReferenceEquals(item, selfCandidate))
+            .Select(item => item with { Kind = "player" })
+            .Concat(sceneResult.OtherPlayers)
+            .ToArray();
         return baseResult with { Monsters = filteredMonsters, Drops = filteredDrops, OtherPlayers = otherPlayers, Self = self };
     }
 
@@ -116,7 +131,17 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
         foreach (YoloDetection detection in detections)
         {
             if (!manifest.ClassRoles.TryGetValue(detection.ClassName, out string? role)) continue;
-            double minimumConfidence = role == "characterCandidate" ? 0.10 : manifest.ConfidenceThreshold;
+            // The packaged model was trained on downscaled screenshots and
+            // emits small-map mobs around 0.10-0.30 confidence. Keep the
+            // character threshold conservative, but do not discard a mob
+            // solely because the manifest's generic 0.60 threshold is too
+            // high for this class.
+            double minimumConfidence = role switch
+            {
+                "characterCandidate" => 0.10,
+                "monster" => Math.Min(manifest.ConfidenceThreshold, 0.10),
+                _ => manifest.ConfidenceThreshold
+            };
             if (detection.Confidence < minimumConfidence) continue;
             var target = new RecognitionTarget(
                 offsetX + detection.X * tile.Width, offsetY + detection.Y * tile.Height,
@@ -177,23 +202,4 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
         return output;
     }
 
-    private static float[] ToBgrNchw(CapturedFrame frame, int width, int height)
-    {
-        float[] output = new float[3 * width * height];
-        ReadOnlySpan<byte> pixels = frame.BgraPixels.Span;
-        for (int y = 0; y < height; y++)
-        {
-            int sourceY = Math.Min(frame.Height - 1, y * frame.Height / height);
-            for (int x = 0; x < width; x++)
-            {
-                int sourceX = Math.Min(frame.Width - 1, x * frame.Width / width);
-                int source = sourceY * frame.Stride + sourceX * 4;
-                int target = y * width + x;
-                output[target] = pixels[source] / 255f;
-                output[width * height + target] = pixels[source + 1] / 255f;
-                output[2 * width * height + target] = pixels[source + 2] / 255f;
-            }
-        }
-        return output;
-    }
 }

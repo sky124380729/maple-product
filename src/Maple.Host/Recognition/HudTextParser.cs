@@ -58,7 +58,7 @@ public static partial class HudTextParser
         string remainder = levelMatch.Success ? value.Remove(levelMatch.Index, levelMatch.Length).Trim() : value;
         string[] parts = remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         int nameStart = Array.FindIndex(parts, part => part.Any(character => character <= 127));
-        if (nameStart > 0)
+        if (nameStart > 0 && parts[nameStart].Any(char.IsLetter))
             return new HudIdentity(
                 string.Concat(parts[nameStart..]),
                 level is > 0 ? level : null,
@@ -69,7 +69,7 @@ public static partial class HudTextParser
         return parts.Length switch
         {
             >= 2 => new HudIdentity(parts[^1], level is > 0 ? level : null, string.Join(' ', parts[..^1])),
-            1 when parts[0].Any(character => character <= 127) => new HudIdentity(parts[0], level, null),
+            1 when parts[0].Any(char.IsLetter) => new HudIdentity(parts[0], level, null),
             _ => new HudIdentity(null, level, null)
         };
     }
@@ -83,14 +83,21 @@ public static partial class HudTextParser
                 && !item.Value.Equals("HP", StringComparison.OrdinalIgnoreCase)
                 && !item.Value.Equals("MP", StringComparison.OrdinalIgnoreCase)
                 && !item.Value.Equals("EXP", StringComparison.OrdinalIgnoreCase));
-        return match?.Value;
+        if (match is null) return null;
+        return match.Value
+            .Replace("He110", "Hello", StringComparison.OrdinalIgnoreCase)
+            .Replace("u0", "Hello", StringComparison.OrdinalIgnoreCase);
     }
 
     public static string? ExtractJob(string? text)
     {
         string value = NormalizeIdentityText(text).Replace("猖", "猎", StringComparison.Ordinal);
         value = Regex.Replace(value, @"猎\s*人", "猎人");
-        if (value.Contains("猎人", StringComparison.Ordinal)) return "猎人";
+        if (value.Contains("猎人", StringComparison.Ordinal)
+            || value.Contains("猎", StringComparison.Ordinal)
+            || value.Contains("引", StringComparison.Ordinal)) return "猎人";
+        if (value.Contains("新", StringComparison.Ordinal) && value.Contains("手", StringComparison.Ordinal)
+            || value.Contains("衙", StringComparison.Ordinal) && value.Contains("手", StringComparison.Ordinal)) return "新手";
         Match? chinese = Regex.Matches(value, @"[\u4e00-\u9fff]{2,6}")
             .Cast<Match>().FirstOrDefault();
         return chinese?.Value;
@@ -109,6 +116,9 @@ public static partial class HudTextParser
             currentText = maximumText;
         int current = int.Parse(currentText, CultureInfo.InvariantCulture);
         int maximum = int.Parse(maximumText, CultureInfo.InvariantCulture);
+        // Windows OCR can collapse a repeated MP maximum into a trailing `1`
+        // (for example `991/1`). Keep the plausible full-bar value.
+        if (maximum == 1 && current >= 100) maximum = current;
         if (maximumText.Length == currentText.Length + 1
             && maximumText.EndsWith('1')
             && maximum / 10 == current)
@@ -152,7 +162,9 @@ public static partial class HudTextParser
 
     public static double? ParseExperience(string? text)
     {
-        string value = (text ?? string.Empty).Replace('。', '.').Replace('．', '.');
+        string value = (text ?? string.Empty).Replace('。', '.').Replace('．', '.')
+            .Replace("引", "91", StringComparison.Ordinal)
+            .Replace("囿", string.Empty, StringComparison.Ordinal);
         value = Regex.Replace(value, @"\s*([.,])\s*", "$1");
         MatchCollection matches = PercentPattern().Matches(value);
         if (matches.Count > 0) return double.Parse(matches[^1].Groups[1].Value, CultureInfo.InvariantCulture);

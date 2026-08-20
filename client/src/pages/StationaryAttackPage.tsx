@@ -11,7 +11,7 @@ import {
   Typography,
   theme,
 } from 'antd'
-import { ArrowLeftOutlined, ArrowRightOutlined, PlayCircleOutlined, SaveOutlined, StopOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, ArrowRightOutlined, EyeOutlined, PlayCircleOutlined, SaveOutlined, StopOutlined } from '@ant-design/icons'
 import { AttackModeField } from '../components/AttackModeField'
 import { AttackBandsEditor } from '../components/AttackBandsEditor'
 import { AdvancedParametersCollapse } from '../components/AdvancedParametersCollapse'
@@ -149,14 +149,23 @@ export function StationaryAttackPage() {
             <Typography.Title level={1}>Maple Product</Typography.Title>
             <Typography.Text type="secondary">Windows x64 定点持续攻击配置</Typography.Text>
           </div>
-          <Space wrap>
-            <Button icon={<SaveOutlined />} loading={saving} onClick={save}>保存配置</Button>
-            {running ? (
-              <Button danger type="primary" icon={<StopOutlined />} onClick={stop}>停止</Button>
-            ) : (
-              <Button type="primary" icon={<PlayCircleOutlined />} onClick={start}>开始</Button>
-            )}
-          </Space>
+          <div className="header-controls">
+            <Form form={form} component={false}>
+              <RecognitionToggle />
+            </Form>
+            <Space wrap>
+              <Button icon={<EyeOutlined />} onClick={() => postBridgeCommand({
+                command: 'openPreview',
+                recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),
+              })}>打开实时预览</Button>
+              <Button icon={<SaveOutlined />} loading={saving} onClick={save}>保存配置</Button>
+              {running ? (
+                <Button danger type="primary" icon={<StopOutlined />} onClick={stop}>停止</Button>
+              ) : (
+                <Button type="primary" icon={<PlayCircleOutlined />} onClick={start}>开始</Button>
+              )}
+            </Space>
+          </div>
         </header>
 
         <Alert
@@ -195,7 +204,6 @@ export function StationaryAttackPage() {
               />
 
               <AttackModeField />
-              <RecognitionToggle />
 
               <div className="basic-grid">
                 <Form.Item label="攻击键" name="attackKey" rules={[{ required: true }]}>
@@ -217,14 +225,7 @@ export function StationaryAttackPage() {
             </Space>
           </Form>
 
-          <SessionStatusPanel
-            state={session}
-            recognition={recognition}
-            onOpenPreview={() => postBridgeCommand({
-              command: 'openPreview',
-              recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),
-            })}
-          />
+          <SessionStatusPanel state={session} recognition={recognition} />
         </div>
       </main>
       <Modal
