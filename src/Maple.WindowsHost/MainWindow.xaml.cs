@@ -43,9 +43,11 @@ public partial class MainWindow : Window
     private string? requestedStopReason;
     private RecognitionSession? recognitionSession;
     private IAsyncDisposable? recognitionLease;
+    private readonly RecognitionBridgePublisher recognitionBridgePublisher;
 
     public MainWindow()
     {
+        recognitionBridgePublisher = new RecognitionBridgePublisher(PublishBridgeMessage);
         InitializeComponent();
         Loaded += OnLoaded;
         Closed += (_, _) =>
@@ -108,7 +110,11 @@ public partial class MainWindow : Window
                             : null);
                     break;
                 case "stopStationary": await StopStationaryAsync("OPERATOR_REQUESTED"); break;
-                case "openPreview": await OpenPreviewAsync(); break;
+                case "openPreview":
+                    await OpenPreviewAsync(
+                        document.RootElement.TryGetProperty("recognitionEnabled", out JsonElement recognitionEnabled)
+                        && recognitionEnabled.GetBoolean());
+                    break;
             }
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException)
@@ -176,6 +182,10 @@ public partial class MainWindow : Window
         IBrokerConnection activeConnection = connection;
         boundTarget = prepared.Target;
         requestedStopReason = null;
+        connection.SetAttackKey(config.AttackKey);
+        heartbeatLoop = new BrokerHeartbeatLoop(connection);
+        BrokerHeartbeatLoop activeHeartbeat = heartbeatLoop;
+        heartbeatLoop.Start();
         await sessionLog.WriteAsync(
             SessionLogEntry.Create(
                 prepared.SessionId,
@@ -187,20 +197,35 @@ public partial class MainWindow : Window
         await abnormalStore.SaveAsync(
             new AbnormalTerminationRecord(prepared.SessionId, "SESSION_IN_PROGRESS", DateTimeOffset.UtcNow),
             lifetime.Token);
-        connection.SetAttackKey(config.AttackKey);
+        RecognitionSession? activeRecognitionSession = null;
+        IAsyncDisposable? activeRecognitionLease = null;
         if (config.RecognitionEnabled)
         {
-            recognitionSession ??= new RecognitionSession(
-                new Preview.WindowsGraphicsCaptureSource(),
-                new HeuristicHudRecognitionProvider());
-            recognitionLease = await recognitionSession.AcquireAsync(
-                RecognitionLeaseKind.Stationary,
-                prepared.Target!,
-                lifetime.Token);
+            try
+            {
+                activeRecognitionSession = new RecognitionSession(
+                    new Preview.WindowsGraphicsCaptureSource(),
+                    Preview.RecognitionProviderFactory.Create());
+                activeRecognitionSession.SnapshotPublished += OnRecognitionSnapshot;
+                activeRecognitionLease = await activeRecognitionSession.AcquireAsync(
+                    RecognitionLeaseKind.Stationary,
+                    prepared.Target!,
+                    lifetime.Token);
+                recognitionSession = activeRecognitionSession;
+                recognitionLease = activeRecognitionLease;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                if (activeRecognitionSession is not null)
+                {
+                    activeRecognitionSession.SnapshotPublished -= OnRecognitionSnapshot;
+                    await activeRecognitionSession.DisposeAsync();
+                    activeRecognitionSession = null;
+                }
+                activeRecognitionLease = null;
+                PublishRecognitionFault("RECOGNITION_START_FAILED");
+            }
         }
-        heartbeatLoop = new BrokerHeartbeatLoop(connection);
-        BrokerHeartbeatLoop activeHeartbeat = heartbeatLoop;
-        heartbeatLoop.Start();
         sessionCancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         CancellationTokenSource activeCancellation = sessionCancellation;
         var publisher = new WebViewRhythmPublisher(
@@ -235,7 +260,12 @@ public partial class MainWindow : Window
                 prepared.InitialFacing.Value,
                 null,
                 activeCancellation.Token);
-            await CleanupCompletedSessionAsync(activeConnection, activeHeartbeat, activeCancellation);
+            await CleanupCompletedSessionAsync(
+                activeConnection,
+                activeHeartbeat,
+                activeCancellation,
+                activeRecognitionSession,
+                activeRecognitionLease);
         }, activeCancellation.Token);
     }
 
@@ -248,19 +278,20 @@ public partial class MainWindow : Window
         connection = null;
         BrokerHeartbeatLoop? heartbeatToDispose = heartbeatLoop;
         heartbeatLoop = null;
+        IAsyncDisposable? recognitionLeaseToDispose = recognitionLease;
+        recognitionLease = null;
+        RecognitionSession? recognitionSessionToDispose = recognitionSession;
+        recognitionSession = null;
 
         cancellationToDispose?.Cancel();
         cancellationToDispose?.Dispose();
         if (connectionToDispose is not null) await connectionToDispose.ReleaseAllAsync(CancellationToken.None);
-        if (recognitionLease is not null)
+        if (recognitionLeaseToDispose is not null)
+            await recognitionLeaseToDispose.DisposeAsync();
+        if (recognitionSessionToDispose is not null && connectionToDispose is not null)
         {
-            await recognitionLease.DisposeAsync();
-            recognitionLease = null;
-        }
-        if (recognitionSession is not null && connectionToDispose is not null)
-        {
-            await recognitionSession.DisposeAsync();
-            recognitionSession = null;
+            recognitionSessionToDispose.SnapshotPublished -= OnRecognitionSnapshot;
+            await recognitionSessionToDispose.DisposeAsync();
         }
         if (heartbeatToDispose is not null) await heartbeatToDispose.DisposeAsync();
         if (connectionToDispose is not null) await connectionToDispose.DisposeAsync();
@@ -281,7 +312,9 @@ public partial class MainWindow : Window
     private async Task CleanupCompletedSessionAsync(
         IBrokerConnection completedConnection,
         BrokerHeartbeatLoop completedHeartbeat,
-        CancellationTokenSource completedCancellation)
+        CancellationTokenSource completedCancellation,
+        RecognitionSession? completedRecognitionSession,
+        IAsyncDisposable? completedRecognitionLease)
     {
         if (ReferenceEquals(connection, completedConnection))
         {
@@ -291,22 +324,23 @@ public partial class MainWindow : Window
         if (ReferenceEquals(heartbeatLoop, completedHeartbeat)) heartbeatLoop = null;
         if (ReferenceEquals(sessionCancellation, completedCancellation)) sessionCancellation = null;
         await completedConnection.ReleaseAllAsync(CancellationToken.None);
-        if (recognitionLease is not null)
+        if (ReferenceEquals(recognitionLease, completedRecognitionLease)) recognitionLease = null;
+        if (ReferenceEquals(recognitionSession, completedRecognitionSession)) recognitionSession = null;
+        if (completedRecognitionLease is not null)
         {
-            await recognitionLease.DisposeAsync();
-            recognitionLease = null;
+            await completedRecognitionLease.DisposeAsync();
         }
-        if (recognitionSession is not null)
+        if (completedRecognitionSession is not null)
         {
-            await recognitionSession.DisposeAsync();
-            recognitionSession = null;
+            completedRecognitionSession.SnapshotPublished -= OnRecognitionSnapshot;
+            await completedRecognitionSession.DisposeAsync();
         }
         await completedHeartbeat.DisposeAsync();
         await completedConnection.DisposeAsync();
         completedCancellation.Dispose();
     }
 
-    private async Task OpenPreviewAsync()
+    private async Task OpenPreviewAsync(bool recognitionEnabled)
     {
         if (windowLocator is null)
         {
@@ -324,9 +358,23 @@ public partial class MainWindow : Window
             return;
         }
 
-        previewHost ??= new Preview.PreviewWindowHost();
-        await previewHost.ShowAsync(targetResolution.Target.Hwnd, lifetime.Token, loadedConfig.Config.RecognitionEnabled);
+        if (previewHost is null)
+        {
+            previewHost = new Preview.PreviewWindowHost();
+            previewHost.RecognitionSnapshotPublished += OnRecognitionSnapshot;
+        }
+        await previewHost.ShowAsync(targetResolution.Target.Hwnd, lifetime.Token, recognitionEnabled);
     }
+
+    private void OnRecognitionSnapshot(RecognitionSnapshot snapshot) =>
+        recognitionBridgePublisher.TryPublish(snapshot, Environment.TickCount64);
+
+    private void PublishRecognitionFault(string code) =>
+        OnRecognitionSnapshot(RecognitionSnapshot.Create(
+            Guid.NewGuid().ToString("N"), boundTarget, 0,
+            Environment.TickCount64, Environment.TickCount64,
+            HudObservation.Empty, [], [], [], null)
+            .WithHealth(RecognitionHealth.Faulted, code));
 
     private void PublishLoadedConfig()
     {

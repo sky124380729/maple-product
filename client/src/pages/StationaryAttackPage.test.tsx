@@ -76,6 +76,74 @@ describe('StationaryAttackPage', () => {
     expect(screen.getByText('四段攻击权重总和必须为 100%')).toBeVisible()
   })
 
+  it('shows character and resource recognition from the Host snapshot', () => {
+    render(<StationaryAttackPage />)
+
+    act(() => bridgeListener?.(new MessageEvent('message', {
+      data: {
+        type: 'recognition.snapshot',
+        snapshot: {
+          health: 'running', frameAgeMs: 42, faultCode: null,
+          hud: {
+            characterName: 'Pink丶Bin', level: 43, job: '猎人',
+            hpCurrent: 1586, hpMax: 1586, hpPercent: 1,
+            mpCurrent: 914, mpMax: 991, mpPercent: 0.922,
+            expPercent: 0.23, confidence: 0.88,
+          },
+        },
+      },
+    })))
+
+    expect(screen.getByText('Pink丶Bin')).toBeVisible()
+    expect(screen.getByText('Lv.43')).toBeVisible()
+    expect(screen.getByText('猎人')).toBeVisible()
+    expect(screen.getByText('1586 / 1586')).toBeVisible()
+    expect(screen.getByText('914 / 991')).toBeVisible()
+    expect(screen.getByText('0.23%')).toBeVisible()
+    expect(screen.getByText('42 ms')).toBeVisible()
+  })
+
+  it('marks a frozen recognition snapshot stale as its local frame age grows', () => {
+    vi.useFakeTimers()
+    try {
+      render(<StationaryAttackPage />)
+
+      act(() => bridgeListener?.(new MessageEvent('message', {
+        data: {
+          type: 'recognition.snapshot',
+          snapshot: {
+            health: 'running', frameAgeMs: 20, faultCode: null,
+            hud: {
+              characterName: null, level: null, job: null,
+              hpCurrent: null, hpMax: null, hpPercent: null,
+              mpCurrent: null, mpMax: null, mpPercent: null,
+              expPercent: null, confidence: 0,
+            },
+          },
+        },
+      })))
+
+      act(() => vi.advanceTimersByTime(750))
+
+      expect(screen.getByText('结果过期')).toBeVisible()
+      expect(screen.getByText(/7\d\d ms/)).toBeVisible()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('opens preview with the current recognition switch without requiring save', async () => {
+    const user = userEvent.setup()
+    render(<StationaryAttackPage />)
+
+    await user.click(screen.getByRole('switch'))
+    await user.click(screen.getByRole('button', { name: /打开实时预览/ }))
+
+    expect(vi.mocked(window.chrome!.webview!.postMessage)).toHaveBeenCalledWith({
+      command: 'openPreview', recognitionEnabled: true,
+    })
+  })
+
   it('shows the previous abnormal termination reported at startup', () => {
     render(<StationaryAttackPage />)
 

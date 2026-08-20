@@ -2,6 +2,15 @@
   "version": 1,
   "dependencies": {
     "net8.0-windows10.0.19041": {
+      "Microsoft.ML.OnnxRuntime": {
+        "type": "Direct",
+        "requested": "[1.29.0, )",
+        "resolved": "1.29.0",
+        "contentHash": "bUO3Ryc42UVkDGByBIYU9/ogRURGHeMOEq96LMWnDBVMQGZpIahBhPRCeu+Qq6+EJh/dfxzFJBKZa0/+yMmpWQ==",
+        "dependencies": {
+          "Microsoft.ML.OnnxRuntime.Managed": "1.29.0"
+        }
+      },
       "Microsoft.Web.WebView2": {
         "type": "Direct",
         "requested": "[1.0.4129.50, )",
@@ -27,6 +36,15 @@
         "dependencies": {
           "NETStandard.Library": "1.6.1",
           "SharpDX": "4.2.0"
+        }
+      },
+      "Microsoft.ML.OnnxRuntime.Managed": {
+        "type": "Transitive",
+        "resolved": "1.29.0",
+        "contentHash": "jLy5PtzvRQCBFOczzfRY7zpuMVUyLwjO0Jsdd8MBZdmnPIqx5vW9cYDNyCqkrYpwkof8GlqBVaEUMWrMWRtvuw==",
+        "dependencies": {
+          "System.Memory": "4.5.5",
+          "System.Numerics.Tensors": "9.0.0"
         }
       },
       "Microsoft.NETCore.Platforms": {
@@ -459,6 +477,11 @@
           "System.Threading": "4.3.0"
         }
       },
+      "System.Memory": {
+        "type": "Transitive",
+        "resolved": "4.5.5",
+        "contentHash": "XIWiDvKPXaTveaB7HVganDlOCRoj03l+jrwNvcge/t8vhGYKvqV+dMv6G4SAX2NoNmN0wZfVPTAlFwZcZvVOUw=="
+      },
       "System.Net.Http": {
         "type": "Transitive",
         "resolved": "4.3.0",
@@ -515,6 +538,11 @@
           "System.Runtime": "4.3.0",
           "System.Threading.Tasks": "4.3.0"
         }
+      },
+      "System.Numerics.Tensors": {
+        "type": "Transitive",
+        "resolved": "9.0.0",
+        "contentHash": "hyJB4UlpAi19Xr9AXzu2NuagKC4lPfHObNMEAA0HmqFz2rX7wKgzeYzO/jM/eBHDhnUGFFEjk5cOoJaxqg5J4A=="
       },
       "System.ObjectModel": {
         "type": "Transitive",
@@ -946,6 +974,15 @@
       }
     },
     "net8.0-windows10.0.19041/win-x64": {
+      "Microsoft.ML.OnnxRuntime": {
+        "type": "Direct",
+        "requested": "[1.29.0, )",
+        "resolved": "1.29.0",
+        "contentHash": "bUO3Ryc42UVkDGByBIYU9/ogRURGHeMOEq96LMWnDBVMQGZpIahBhPRCeu+Qq6+EJh/dfxzFJBKZa0/+yMmpWQ==",
+        "dependencies": {
+          "Microsoft.ML.OnnxRuntime.Managed": "1.29.0"
+        }
+      },
       "Microsoft.Web.WebView2": {
         "type": "Direct",
         "requested": "[1.0.4129.50, )",

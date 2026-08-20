@@ -1,8 +1,9 @@
 import { Alert, Button, Descriptions, Space, Statistic, Tag, Typography } from 'antd'
 import { EyeOutlined } from '@ant-design/icons'
 import type { SessionState } from '../state/sessionReducer'
+import type { RecognitionSnapshotView } from '../bridge/types'
+import { RecognitionStatus } from './RecognitionStatus'
 import { formatDurationSeconds, useRhythmCountdown } from '../hooks/useRhythmCountdown'
-import { postBridgeCommand } from '../bridge/bridge'
 
 const phaseLabels: Record<string, string> = {
   idle: '等待开始',
@@ -26,7 +27,15 @@ const nextPhaseLabels: Record<string, string> = {
   resting: '下一轮攻击',
 }
 
-export function SessionStatusPanel({ state }: { state: SessionState }) {
+export function SessionStatusPanel({
+  state,
+  recognition,
+  onOpenPreview,
+}: {
+  state: SessionState
+  recognition: RecognitionSnapshotView | null
+  onOpenPreview: () => void
+}) {
   const remainingMs = useRhythmCountdown(state.rhythm)
   const phase = state.rhythm?.phase ?? 'idle'
   const active = state.status === 'running'
@@ -66,8 +75,10 @@ export function SessionStatusPanel({ state }: { state: SessionState }) {
         <Descriptions.Item label="输入状态">{active ? 'Broker 已租约保护' : '未发送输入'}</Descriptions.Item>
       </Descriptions>
 
+      <RecognitionStatus snapshot={recognition} />
+
       <Space wrap>
-        <Button icon={<EyeOutlined />} onClick={() => postBridgeCommand({ command: 'openPreview' })}>
+        <Button icon={<EyeOutlined />} onClick={onOpenPreview}>
           打开实时预览
         </Button>
         <Typography.Text type="secondary">预览在独立原生窗口打开</Typography.Text>

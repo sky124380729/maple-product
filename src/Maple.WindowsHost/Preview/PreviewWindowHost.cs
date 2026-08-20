@@ -16,14 +16,18 @@ public sealed class PreviewWindowHost : IAsyncDisposable
     private Canvas? overlay;
     private PreviewSession? session;
     private RecognitionSession? recognition;
-    private IAsyncDisposable? recognitionLease;
+    private RecognitionLeaseToggle? recognitionToggle;
     private long firstFrameAtMonoMs;
     private long lastSequence;
     private long displayedFrames;
     private long droppedFrames;
     private int renderPending;
+    private RecognitionSnapshot? latestRecognition;
+    private int lastFrameWidth;
+    private int lastFrameHeight;
 
     public event Action<PreviewFault>? Faulted;
+    public event Action<RecognitionSnapshot>? RecognitionSnapshotPublished;
 
     public void Show() => _ = ShowAsync(0, CancellationToken.None);
 
@@ -72,7 +76,11 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         };
         window.Closed += OnClosed;
         session = new PreviewSession(new WindowsGraphicsCaptureSource());
-        recognition = new RecognitionSession(new HeuristicHudRecognitionProvider());
+        recognition = new RecognitionSession(RecognitionProviderFactory.Create());
+        recognitionToggle = new RecognitionLeaseToggle(token => recognition.AcquireAsync(
+            RecognitionLeaseKind.Preview,
+            new Maple.Host.Windows.WindowIdentity(hwnd, 0, string.Empty, 0),
+            token));
         recognition.SnapshotPublished += OnRecognitionSnapshot;
         session.FrameArrived += OnFrameArrived;
         session.Faulted += OnFaulted;
@@ -109,6 +117,8 @@ public sealed class PreviewWindowHost : IAsyncDisposable
                     frame.Stride,
                     0);
                 image.Source = bitmap;
+                lastFrameWidth = frame.Width;
+                lastFrameHeight = frame.Height;
                 recognition?.PushFrame(frame);
 
                 if (firstFrameAtMonoMs == 0) firstFrameAtMonoMs = frame.CapturedAtMonoMs;
@@ -119,7 +129,11 @@ public sealed class PreviewWindowHost : IAsyncDisposable
                 long elapsed = Math.Max(1, frame.CapturedAtMonoMs - firstFrameAtMonoMs);
                 double fps = displayedFrames * 1000d / elapsed;
                 long age = Math.Max(0, Environment.TickCount64 - frame.CapturedAtMonoMs);
-                diagnostics.Text = $"FPS {fps:F1}   Frame age {age}ms   Dropped frames {droppedFrames}";
+                RecognitionSnapshot? recognized = latestRecognition;
+                string recognitionText = recognized is null
+                    ? "识别未开启"
+                    : $"识别 {recognized.Health}   人物 {(recognized.Self is null ? 0 : 1)}   怪物 {recognized.Monsters.Count}";
+                diagnostics.Text = $"FPS {fps:F1}   Frame age {age}ms   Dropped {droppedFrames}   {recognitionText}";
             }
             finally { Volatile.Write(ref renderPending, 0); }
         });
@@ -150,10 +164,10 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             activeSession.Faulted -= OnFaulted;
             await activeSession.DisposeAsync();
         }
-        if (recognitionLease is not null)
+        if (recognitionToggle is not null)
         {
-            await recognitionLease.DisposeAsync();
-            recognitionLease = null;
+            await recognitionToggle.DisposeAsync();
+            recognitionToggle = null;
         }
         if (recognition is not null)
         {
@@ -169,37 +183,52 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         displayedFrames = 0;
         droppedFrames = 0;
         renderPending = 0;
+        latestRecognition = null;
+        lastFrameWidth = 0;
+        lastFrameHeight = 0;
     }
 
     private async Task SetRecognitionAsync(long hwnd, bool enabled, CancellationToken cancellationToken)
     {
-        if (!enabled || recognition is null) return;
-        recognitionLease ??= await recognition.AcquireAsync(
-            RecognitionLeaseKind.Preview,
-            new Maple.Host.Windows.WindowIdentity(hwnd, 0, string.Empty, 0),
-            cancellationToken);
+        if (recognitionToggle is null) return;
+        await recognitionToggle.SetEnabledAsync(enabled, cancellationToken);
+        if (!enabled)
+        {
+            latestRecognition = null;
+            overlay?.Children.Clear();
+        }
     }
 
     private void OnRecognitionSnapshot(RecognitionSnapshot snapshot)
     {
+        latestRecognition = snapshot;
+        RecognitionSnapshotPublished?.Invoke(snapshot);
         window?.Dispatcher.BeginInvoke(() =>
         {
-            if (diagnostics is null) return;
-            string hp = snapshot.Hud.HpPercent is double hpValue ? $"HP {hpValue:P0}" : "HP -";
-            string mp = snapshot.Hud.MpPercent is double mpValue ? $"MP {mpValue:P0}" : "MP -";
-            string exp = snapshot.Hud.ExpPercent is double expValue ? $"EXP {expValue:P1}" : "EXP -";
-            diagnostics.Text = $"识别 {snapshot.Health}   {hp}   {mp}   {exp}   怪物 {snapshot.Monsters.Count}   掉落 {snapshot.Drops.Count}   玩家 {snapshot.OtherPlayers.Count}   Frame age {snapshot.FrameAgeMs}ms";
             if (overlay is null) return;
             overlay.Children.Clear();
-            foreach (var target in snapshot.Monsters.Concat(snapshot.Drops).Concat(snapshot.OtherPlayers))
+            IReadOnlyList<RecognitionOverlayBox> boxes = RecognitionOverlayLayout.Create(
+                snapshot,
+                lastFrameWidth,
+                lastFrameHeight,
+                overlay.ActualWidth,
+                overlay.ActualHeight);
+            foreach (RecognitionOverlayBox target in boxes)
             {
                 var box = new Border
                 {
-                    BorderBrush = target.Kind == "monster" ? System.Windows.Media.Brushes.Red : System.Windows.Media.Brushes.Cyan,
+                    BorderBrush = target.Kind == "monster"
+                        ? System.Windows.Media.Brushes.Red
+                        : System.Windows.Media.Brushes.LimeGreen,
                     BorderThickness = new Thickness(2),
                     Width = target.Width,
                     Height = target.Height,
-                    Child = new TextBlock { Text = $"{target.Kind} {target.Confidence:P0}", Foreground = System.Windows.Media.Brushes.White }
+                    Child = new TextBlock
+                    {
+                        Text = $"{(target.Kind == "monster" ? "怪物" : "人物")} {target.Confidence:P0}",
+                        Foreground = System.Windows.Media.Brushes.White,
+                        Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(160, 0, 0, 0))
+                    }
                 };
                 Canvas.SetLeft(box, target.X);
                 Canvas.SetTop(box, target.Y);

@@ -20,5 +20,6 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
     <PackageReference Include="SharpDX.Direct3D11" Version="4.2.0" />
     <PackageReference Include="SharpDX.DXGI" Version="4.2.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
   </ItemGroup>
 </Project>

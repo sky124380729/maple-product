@@ -47,6 +47,15 @@ button, input { font: inherit; }
 .countdown-label { display: block; margin-bottom: 2px; color: #49605c; }
 .countdown-block .ant-statistic-content { color: #0f6158; font-family: "Cascadia Mono", Consolas, monospace; font-size: 38px; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .session-details { margin-bottom: 20px; }
+.recognition-status { margin: 0 0 20px; padding: 14px; border: 1px solid #d8dfdd; border-radius: 8px; background: #fff; }
+.recognition-status-heading, .identity-row, .resource-copy, .recognition-meta { display: flex; align-items: center; gap: 10px; }
+.recognition-status-heading { justify-content: space-between; margin-bottom: 12px; }
+.recognition-status-heading h4.ant-typography { margin: 0; font-size: 15px; }
+.identity-row { flex-wrap: wrap; margin-bottom: 12px; }
+.resource-row { margin-top: 8px; }
+.resource-copy { justify-content: space-between; margin-bottom: 2px; }
+.recognition-meta { flex-wrap: wrap; justify-content: space-between; margin-top: 12px; font-size: 12px; }
+.recognition-exp, .recognition-age { display: inline-flex; gap: 4px; }
 .status-panel .ant-alert { margin-bottom: 12px; }
 .facing-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0 8px; }
 .facing-option.ant-btn { width: 100%; height: 88px; font-size: 36px; }

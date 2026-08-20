@@ -18,7 +18,7 @@ import { AdvancedParametersCollapse } from '../components/AdvancedParametersColl
 import { SessionStatusPanel } from '../components/SessionStatusPanel'
 import { RecognitionToggle } from '../components/RecognitionToggle'
 import { postBridgeCommand, subscribeBridgeMessages } from '../bridge/bridge'
-import { safeDefaults, type StationaryAttackConfig } from '../bridge/types'
+import { safeDefaults, type RecognitionSnapshotView, type StationaryAttackConfig } from '../bridge/types'
 import { hostErrorMessage, validateStationaryConfig, type ConfigValidationError } from '../bridge/configValidation'
 import { initialSessionState, sessionReducer } from '../state/sessionReducer'
 import '../styles/app.css'
@@ -33,6 +33,7 @@ export function StationaryAttackPage() {
   const [configError, setConfigError] = useState<string | null>(null)
   const [abnormalTermination, setAbnormalTermination] = useState<string | null>(null)
   const [pendingStartConfig, setPendingStartConfig] = useState<StationaryAttackConfig | null>(null)
+  const [recognition, setRecognition] = useState<RecognitionSnapshotView | null>(null)
   const running = session.status === 'running' || session.status === 'locating' || session.status === 'arming'
 
   const applyHostValidationErrors = useCallback((errors: Array<{ field: string; code: string }>) => {
@@ -55,6 +56,7 @@ export function StationaryAttackPage() {
         config?: StationaryAttackConfig
         validationErrors?: Array<{ field: string; code: string }>
         record?: { reason?: string; stoppedAtUtc?: string }
+        snapshot?: RecognitionSnapshotView
       }
       if (data.type === 'config.loaded' && data.config) {
         form.setFieldsValue({ ...data.config, attackBands: data.config.attackBands.map((band) => ({ ...band })) })
@@ -78,6 +80,7 @@ export function StationaryAttackPage() {
           ? '上次运行未正常结束'
           : `上次运行异常停止：${data.record.reason}`)
       }
+      if (data.type === 'recognition.snapshot' && data.snapshot) setRecognition(data.snapshot)
     })
     postBridgeCommand({ command: 'loadConfig' })
     return unsubscribe
@@ -214,7 +217,14 @@ export function StationaryAttackPage() {
             </Space>
           </Form>
 
-          <SessionStatusPanel state={session} />
+          <SessionStatusPanel
+            state={session}
+            recognition={recognition}
+            onOpenPreview={() => postBridgeCommand({
+              command: 'openPreview',
+              recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),
+            })}
+          />
         </div>
       </main>
       <Modal

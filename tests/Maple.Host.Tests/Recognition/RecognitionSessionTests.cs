@@ -29,15 +29,15 @@ public sealed class RecognitionSessionTests
         var source = new FakeCaptureSource();
         var provider = new FakeProvider { Exception = new InvalidOperationException("model") };
         await using var session = new RecognitionSession(source, provider);
-        RecognitionSnapshot? observed = null;
-        session.SnapshotPublished += snapshot => observed = snapshot;
+        var observed = new TaskCompletionSource<RecognitionSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.SnapshotPublished += snapshot => observed.TrySetResult(snapshot);
         await using var lease = await session.AcquireAsync(RecognitionLeaseKind.Preview, new WindowIdentity(1, 2, "x", 3), CancellationToken.None);
 
         source.Emit(new CapturedFrame(1, 1, 4, new byte[4], 10, 1));
-        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        RecognitionSnapshot snapshot = await observed.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
-        Assert.Equal(RecognitionHealth.Faulted, observed?.Health);
-        Assert.Equal("RECOGNITION_PROVIDER_FAILED", observed?.FaultCode);
+        Assert.Equal(RecognitionHealth.Faulted, snapshot.Health);
+        Assert.Equal("RECOGNITION_PROVIDER_FAILED", snapshot.FaultCode);
     }
 
     private sealed class FakeProvider : IRecognitionProvider

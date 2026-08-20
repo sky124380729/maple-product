@@ -91,6 +91,8 @@ public sealed class RecognitionSession : IAsyncDisposable
             source.FrameArrived -= OnFrameArrived;
             await source.DisposeAsync().ConfigureAwait(false);
         }
+        if (provider is IAsyncDisposable asyncProvider)
+            await asyncProvider.DisposeAsync().ConfigureAwait(false);
         frameSignal.Dispose();
         runCts.Dispose();
     }

@@ -76,3 +76,24 @@ export const safeDefaults: StationaryAttackConfig = {
   attackTriggerMode: 'always',
   recognitionEnabled: false,
 }
+
+export interface RecognitionHudSnapshot {
+  characterName: string | null
+  level: number | null
+  job: string | null
+  hpCurrent: number | null
+  hpMax: number | null
+  mpCurrent: number | null
+  mpMax: number | null
+  hpPercent: number | null
+  mpPercent: number | null
+  expPercent: number | null
+  confidence: number
+}
+
+export interface RecognitionSnapshotView {
+  health: 'disabled' | 'starting' | 'running' | 'stale' | 'faulted' | 'targetLost'
+  frameAgeMs: number
+  faultCode: string | null
+  hud: RecognitionHudSnapshot
+}

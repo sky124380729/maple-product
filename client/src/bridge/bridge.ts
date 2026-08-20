@@ -5,7 +5,7 @@ type BridgeCommand =
   | { command: 'saveConfig'; config: StationaryAttackConfig }
   | { command: 'startStationary'; config: StationaryAttackConfig; initialFacing: 'left' | 'right' }
   | { command: 'stopStationary' }
-  | { command: 'openPreview' }
+  | { command: 'openPreview'; recognitionEnabled: boolean }
 
 declare global {
   interface Window {
