@@ -23,8 +23,8 @@ public sealed class OcrHudRecognitionProvider(IRegionTextRecognizer ocr) : IReco
         }
         HudObservation hud = cached with
         {
-            HpPercent = visualResult.Hud.HpPercent ?? Ratio(cached.HpCurrent, cached.HpMax),
-            MpPercent = visualResult.Hud.MpPercent ?? Ratio(cached.MpCurrent, cached.MpMax),
+            HpPercent = Ratio(cached.HpCurrent, cached.HpMax) ?? visualResult.Hud.HpPercent,
+            MpPercent = Ratio(cached.MpCurrent, cached.MpMax) ?? visualResult.Hud.MpPercent,
             Confidence = cached.CharacterName is null && cached.HpCurrent is null ? visualResult.Hud.Confidence : 0.8
         };
         return visualResult with { Hud = hud };

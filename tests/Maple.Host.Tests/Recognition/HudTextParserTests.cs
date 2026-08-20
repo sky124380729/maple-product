@@ -27,5 +27,32 @@ public sealed class HudTextParserTests
         Assert.InRange(layout.Identity.Y, 730, 740);
         Assert.True(layout.HpText.X < layout.MpText.X);
         Assert.True(layout.MpText.X < layout.ExpText.X);
+
+        HudFrameLayout physical = AdaptiveHudLayout.Resolve(2051, 1200);
+        Assert.InRange(physical.Identity.Y, 1110, 1135);
+        Assert.InRange(physical.HpText.Height, 80, 90);
+    }
+
+    [Theory]
+    [InlineData("HP [ 1 S86/1 S86]", 1586, 1586)]
+    [InlineData("MP [ 3 引 / 3 引 ]", 991, 991)]
+    [InlineData("HP [ 1 s86 ／ 1 s86 ]", 1586, 1586)]
+    public void Repairs_common_ocr_spacing_and_character_substitutions(string text, int current, int maximum)
+    {
+        HudResource resource = HudTextParser.ParseResource(text);
+
+        Assert.Equal(current, resource.Current);
+        Assert.Equal(maximum, resource.Maximum);
+    }
+
+    [Fact]
+    public void Parses_real_frame_identity_and_experience_ocr()
+    {
+        HudIdentity identity = HudTextParser.ParseIdentity("LV. 0 猎 人 Pink 、 Bin");
+
+        Assert.Null(identity.Level);
+        Assert.Equal("猎人", identity.Job);
+        Assert.Equal("Pink丶Bin", identity.CharacterName);
+        Assert.Equal(0.23, HudTextParser.ParseExperience("E)(P 30s0．23"));
     }
 }

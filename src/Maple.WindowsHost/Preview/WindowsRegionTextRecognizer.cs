@@ -42,7 +42,8 @@ public sealed class WindowsRegionTextRecognizer : IRegionTextRecognizer
             using var stream = new InMemoryRandomAccessStream();
             using (var writer = new DataWriter(stream))
             {
-                writer.WriteBytes(BuildBitmap(cropped, width, height));
+                bool identityRegion = region.Width >= frame.Width * 0.14;
+                writer.WriteBytes(BuildBitmap(cropped, width, height, identityRegion ? 3 : 1));
                 await writer.StoreAsync().AsTask(cancellationToken).ConfigureAwait(false);
                 await writer.FlushAsync().AsTask(cancellationToken).ConfigureAwait(false);
                 writer.DetachStream();
@@ -57,18 +58,27 @@ public sealed class WindowsRegionTextRecognizer : IRegionTextRecognizer
         finally { gate.Release(); }
     }
 
-    private static byte[] BuildBitmap(byte[] topDownBgra, int width, int height)
+    private static byte[] BuildBitmap(byte[] topDownBgra, int width, int height, int scale)
     {
-        int pixelBytes = width * height * 4;
+        int scaledWidth = width * scale;
+        int scaledHeight = height * scale;
+        int pixelBytes = scaledWidth * scaledHeight * 4;
         using var stream = new MemoryStream(54 + pixelBytes);
         using var writer = new BinaryWriter(stream);
         writer.Write((byte)'B'); writer.Write((byte)'M');
         writer.Write(54 + pixelBytes); writer.Write(0); writer.Write(54);
-        writer.Write(40); writer.Write(width); writer.Write(height);
+        writer.Write(40); writer.Write(scaledWidth); writer.Write(scaledHeight);
         writer.Write((short)1); writer.Write((short)32); writer.Write(0);
         writer.Write(pixelBytes); writer.Write(2835); writer.Write(2835); writer.Write(0); writer.Write(0);
         int rowBytes = width * 4;
-        for (int row = height - 1; row >= 0; row--) writer.Write(topDownBgra, row * rowBytes, rowBytes);
+        byte[] scaledRow = new byte[scaledWidth * 4];
+        for (int row = height - 1; row >= 0; row--)
+        {
+            for (int sourceX = 0; sourceX < width; sourceX++)
+                for (int copy = 0; copy < scale; copy++)
+                    System.Buffer.BlockCopy(topDownBgra, row * rowBytes + sourceX * 4, scaledRow, (sourceX * scale + copy) * 4, 4);
+            for (int copy = 0; copy < scale; copy++) writer.Write(scaledRow);
+        }
         return stream.ToArray();
     }
 }

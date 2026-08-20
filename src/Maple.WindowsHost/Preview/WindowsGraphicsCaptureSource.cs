@@ -19,6 +19,7 @@ public sealed class WindowsGraphicsCaptureSource : IFrameCaptureSource
     private GraphicsCaptureSession? captureSession;
     private long sequence;
     private long lastEmittedMonoMs;
+    private long activeHwnd;
 
     public event Action<CapturedFrame>? FrameArrived;
     public event Action<PreviewFault>? Faulted;
@@ -30,6 +31,7 @@ public sealed class WindowsGraphicsCaptureSource : IFrameCaptureSource
             throw new PlatformNotSupportedException("Windows.Graphics.Capture is unavailable.");
 
         StopCore();
+        activeHwnd = hwnd;
         nativeDevice = new D3D11Device(DriverType.Hardware, DeviceCreationFlags.BgraSupport);
         winrtDevice = Direct3DInterop.CreateWinRtDevice(nativeDevice);
         GraphicsCaptureItem item = CaptureItemInterop.CreateForWindow(new IntPtr(hwnd));
@@ -81,13 +83,14 @@ public sealed class WindowsGraphicsCaptureSource : IFrameCaptureSource
                 byte[] pixels = new byte[rowBytes * description.Height];
                 for (int row = 0; row < description.Height; row++)
                     Marshal.Copy(IntPtr.Add(mapped.DataPointer, row * mapped.RowPitch), pixels, row * rowBytes, rowBytes);
-                FrameArrived?.Invoke(new CapturedFrame(
+                CapturedFrame captured = new(
                     description.Width,
                     description.Height,
                     rowBytes,
                     pixels,
                     capturedAt,
-                    current));
+                    current);
+                FrameArrived?.Invoke(CropToClient(captured));
             }
             finally
             {
@@ -112,7 +115,34 @@ public sealed class WindowsGraphicsCaptureSource : IFrameCaptureSource
         nativeDevice = null;
         sequence = 0;
         lastEmittedMonoMs = 0;
+        activeHwnd = 0;
     }
+
+    private CapturedFrame CropToClient(CapturedFrame frame)
+    {
+        if (activeHwnd == 0 || !GetWindowRect(new IntPtr(activeHwnd), out Rect windowRect)
+            || !GetClientRect(new IntPtr(activeHwnd), out Rect clientRect)) return frame;
+        Point clientOrigin = new();
+        if (!ClientToScreen(new IntPtr(activeHwnd), ref clientOrigin)) return frame;
+        int windowWidth = Math.Max(1, windowRect.Right - windowRect.Left);
+        int windowHeight = Math.Max(1, windowRect.Bottom - windowRect.Top);
+        double scaleX = frame.Width / (double)windowWidth;
+        double scaleY = frame.Height / (double)windowHeight;
+        int left = (int)Math.Round((clientOrigin.X - windowRect.Left) * scaleX);
+        int top = (int)Math.Round((clientOrigin.Y - windowRect.Top) * scaleY);
+        int width = (int)Math.Round((clientRect.Right - clientRect.Left) * scaleX);
+        int height = (int)Math.Round((clientRect.Bottom - clientRect.Top) * scaleY);
+        return CapturedFrameCropper.Crop(frame, left, top, width, height);
+    }
+
+    private struct Rect { public int Left, Top, Right, Bottom; }
+    private struct Point { public int X, Y; }
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
 }
 
 internal static class CaptureItemInterop
