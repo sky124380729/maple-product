@@ -72,7 +72,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         };
         window.Closed += OnClosed;
         session = new PreviewSession(new WindowsGraphicsCaptureSource());
-        recognition = new RecognitionSession(new DiagnosticRecognitionProvider());
+        recognition = new RecognitionSession(new HeuristicHudRecognitionProvider());
         recognition.SnapshotPublished += OnRecognitionSnapshot;
         session.FrameArrived += OnFrameArrived;
         session.Faulted += OnFaulted;

@@ -55,6 +55,7 @@ public sealed class RecognitionSessionTests
 
     private sealed class FakeCaptureSource : IFrameCaptureSource
     {
+#pragma warning disable CS0067
         public int StartCount { get; private set; }
         public int StopCount { get; private set; }
         public event Action<CapturedFrame>? FrameArrived;
@@ -63,5 +64,6 @@ public sealed class RecognitionSessionTests
         public Task StopAsync() { StopCount++; return Task.CompletedTask; }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public void Emit(CapturedFrame frame) => FrameArrived?.Invoke(frame);
+#pragma warning restore CS0067
     }
 }

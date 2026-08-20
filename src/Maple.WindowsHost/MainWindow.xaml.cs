@@ -192,7 +192,7 @@ public partial class MainWindow : Window
         {
             recognitionSession ??= new RecognitionSession(
                 new Preview.WindowsGraphicsCaptureSource(),
-                new DiagnosticRecognitionProvider());
+                new HeuristicHudRecognitionProvider());
             recognitionLease = await recognitionSession.AcquireAsync(
                 RecognitionLeaseKind.Stationary,
                 prepared.Target!,
