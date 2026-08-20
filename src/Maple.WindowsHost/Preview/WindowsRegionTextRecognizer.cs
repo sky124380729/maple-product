@@ -55,8 +55,10 @@ public sealed class WindowsRegionTextRecognizer : IRegionTextRecognizer
             using var stream = new InMemoryRandomAccessStream();
             using (var writer = new DataWriter(stream))
             {
-                bool identityRegion = region.Width >= frame.Width * 0.14;
-                writer.WriteBytes(BuildBitmap(cropped, width, height, identityRegion ? 3 : 1));
+                bool identityRegion = region.Width >= frame.Width * 0.14
+                    || region.Width <= frame.Width * 0.07;
+                writer.WriteBytes(BuildBitmap(cropped, width, height, identityRegion ? 6 : 1,
+                    region.Width <= frame.Width * 0.07));
                 await writer.StoreAsync().AsTask(cancellationToken).ConfigureAwait(false);
                 await writer.FlushAsync().AsTask(cancellationToken).ConfigureAwait(false);
                 writer.DetachStream();
@@ -77,7 +79,7 @@ public sealed class WindowsRegionTextRecognizer : IRegionTextRecognizer
         finally { gate.Release(); }
     }
 
-    private static byte[] BuildBitmap(byte[] topDownBgra, int width, int height, int scale)
+    private static byte[] BuildBitmap(byte[] topDownBgra, int width, int height, int scale, bool monochrome = false)
     {
         int scaledWidth = width * scale;
         int scaledHeight = height * scale;
@@ -95,7 +97,27 @@ public sealed class WindowsRegionTextRecognizer : IRegionTextRecognizer
         {
             for (int sourceX = 0; sourceX < width; sourceX++)
                 for (int copy = 0; copy < scale; copy++)
-                    System.Buffer.BlockCopy(topDownBgra, row * rowBytes + sourceX * 4, scaledRow, (sourceX * scale + copy) * 4, 4);
+                {
+                    int source = row * rowBytes + sourceX * 4;
+                    int destination = (sourceX * scale + copy) * 4;
+                    if (!monochrome)
+                    {
+                        System.Buffer.BlockCopy(topDownBgra, source, scaledRow, destination, 4);
+                    }
+                    else
+                    {
+                        byte blue = topDownBgra[source];
+                        byte green = topDownBgra[source + 1];
+                        byte red = topDownBgra[source + 2];
+                        byte luminance = (byte)Math.Clamp((blue * 11 + green * 59 + red * 30) / 100, 0, 255);
+                        byte value = (red > 175 && green > 175 && blue > 175) || luminance > 235
+                            ? (byte)255 : (byte)0;
+                        scaledRow[destination] = value;
+                        scaledRow[destination + 1] = value;
+                        scaledRow[destination + 2] = value;
+                        scaledRow[destination + 3] = 255;
+                    }
+                }
             for (int copy = 0; copy < scale; copy++) writer.Write(scaledRow);
         }
         return stream.ToArray();

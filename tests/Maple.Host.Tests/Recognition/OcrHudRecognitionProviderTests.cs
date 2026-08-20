@@ -31,6 +31,28 @@ public sealed class OcrHudRecognitionProviderTests
         Assert.Equal(0.23, result.Hud.ExpPercent);
     }
 
+    [Fact]
+    public async Task Reassembles_high_dpi_name_from_split_status_regions()
+    {
+        var ocr = new OrderedOcr([
+            "4 0 猎 人 Pi n k 、 Bin",
+            "． 4 3",
+            "Pink 、 Bin",
+            "HP [ 1 S86/1 S86]",
+            "MP [ 3 引 / 3 引 ]",
+            "E)(P 30s0．23"]);
+        var pixels = new byte[2051 * 1200 * 4];
+        var frame = new CapturedFrame(2051, 1200, 2051 * 4, pixels, 1000, 1);
+
+        RecognitionAnalysis result = await new OcrHudRecognitionProvider(ocr).AnalyzeAsync(frame, CancellationToken.None);
+
+        Assert.Equal("Pink丶Bin", result.Hud.CharacterName);
+        Assert.Equal(43, result.Hud.Level);
+        Assert.Equal("猎人", result.Hud.Job);
+        Assert.Equal(1586, result.Hud.HpCurrent);
+        Assert.Equal(991, result.Hud.MpMax);
+    }
+
     private sealed class OrderedOcr(IReadOnlyList<string> results) : IRegionTextRecognizer
     {
         private int index;

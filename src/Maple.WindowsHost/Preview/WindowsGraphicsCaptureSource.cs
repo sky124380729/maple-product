@@ -131,7 +131,11 @@ public sealed class WindowsGraphicsCaptureSource : IFrameCaptureSource
         int left = (int)Math.Round((clientOrigin.X - windowRect.Left) * scaleX);
         int top = (int)Math.Round((clientOrigin.Y - windowRect.Top) * scaleY);
         int width = (int)Math.Round((clientRect.Right - clientRect.Left) * scaleX);
-        int height = (int)Math.Round((clientRect.Bottom - clientRect.Top) * scaleY);
+        // WGC reports the outer surface in physical pixels while the classic
+        // client reports a logical height. Keep all pixels below the client
+        // origin; the status row is rendered at the very bottom on some DPI
+        // configurations and is otherwise clipped by the logical height.
+        int height = frame.Height - top;
         return CapturedFrameCropper.Crop(frame, left, top, width, height);
     }
 

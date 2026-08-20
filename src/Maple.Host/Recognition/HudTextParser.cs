@@ -15,8 +15,8 @@ public static partial class AdaptiveHudLayout
         if (width < 800 || height < 600) throw new ArgumentOutOfRangeException(nameof(width), "HUD_RESOLUTION_UNSUPPORTED");
         // The client status bar sits below the chat ticker.  The latter is
         // deliberately excluded because it contains arbitrary player text.
-        double top = height >= 900 ? 0.960 : 0.952;
-        double regionHeight = height >= 900 ? 0.040 : 0.047;
+        double top = height >= 900 ? 0.950 : 0.952;
+        double regionHeight = height >= 900 ? 0.050 : 0.047;
         return new HudFrameLayout(
             Region(width, height, 0.202, top, 0.165, regionHeight),
             Region(width, height, 0.365, top, 0.083, regionHeight),
@@ -45,8 +45,11 @@ public static partial class HudTextParser
 
     public static HudIdentity ParseIdentity(string? text)
     {
-        string value = Regex.Replace(text ?? string.Empty, @"\s+", " ").Trim();
+        string value = NormalizeIdentityText(text);
         if (ContainsChatNoise(value)) return new HudIdentity(null, null, null);
+        value = value.Replace("猖", "猎", StringComparison.Ordinal);
+        value = Regex.Replace(value, @"猎\s*人", "猎人");
+        value = Regex.Replace(value, @"(?i)L[VW][\s\.:]*[@#][^\s]*", string.Empty).Trim();
         value = Regex.Replace(value, @"\s*[、丶，,]\s*", "丶");
         Match levelMatch = LevelPattern().Match(value);
         if (!levelMatch.Success && Regex.IsMatch(value, @"(?i)L[VW]"))
@@ -60,12 +63,37 @@ public static partial class HudTextParser
                 string.Concat(parts[nameStart..]),
                 level is > 0 ? level : null,
                 string.Concat(parts[..nameStart]));
+        string? job = value.Contains("猎人", StringComparison.Ordinal) ? "猎人" : null;
+        if (parts.All(part => part.All(character => character > 127)))
+            return new HudIdentity(null, level is > 0 ? level : null, job);
         return parts.Length switch
         {
             >= 2 => new HudIdentity(parts[^1], level is > 0 ? level : null, string.Join(' ', parts[..^1])),
             1 when parts[0].Any(character => character <= 127) => new HudIdentity(parts[0], level, null),
             _ => new HudIdentity(null, level, null)
         };
+    }
+
+    public static string? ExtractLatinName(string? text)
+    {
+        string value = NormalizeIdentityText(text);
+        MatchCollection matches = Regex.Matches(value, @"[A-Za-z][A-Za-z0-9]*(?:丶[A-Za-z0-9]+)+|[A-Za-z][A-Za-z0-9_]{2,}");
+        Match? match = matches.Cast<Match>()
+            .LastOrDefault(item => !item.Value.Equals("LV", StringComparison.OrdinalIgnoreCase)
+                && !item.Value.Equals("HP", StringComparison.OrdinalIgnoreCase)
+                && !item.Value.Equals("MP", StringComparison.OrdinalIgnoreCase)
+                && !item.Value.Equals("EXP", StringComparison.OrdinalIgnoreCase));
+        return match?.Value;
+    }
+
+    public static string? ExtractJob(string? text)
+    {
+        string value = NormalizeIdentityText(text).Replace("猖", "猎", StringComparison.Ordinal);
+        value = Regex.Replace(value, @"猎\s*人", "猎人");
+        if (value.Contains("猎人", StringComparison.Ordinal)) return "猎人";
+        Match? chinese = Regex.Matches(value, @"[\u4e00-\u9fff]{2,6}")
+            .Cast<Match>().FirstOrDefault();
+        return chinese?.Value;
     }
 
     public static HudResource ParseResource(string? text)
@@ -97,6 +125,15 @@ public static partial class HudTextParser
         || value.Contains("出金", StringComparison.Ordinal)
         || value.Contains("R=", StringComparison.OrdinalIgnoreCase)
         || value.Contains("小时", StringComparison.Ordinal);
+
+    private static string NormalizeIdentityText(string? text)
+    {
+        string value = Regex.Replace(text ?? string.Empty, @"\s+", " ").Trim();
+        value = value.Replace('．', '.').Replace('。', '.');
+        value = Regex.Replace(value, @"\s*[、丶，,]\s*", "丶");
+        value = Regex.Replace(value, @"(?<=\d)\s+(?=\d)", string.Empty);
+        return Regex.Replace(value, @"(?<=[A-Za-z])\s+(?=[A-Za-z])", string.Empty);
+    }
 
     private static string NormalizeOcrDigits(string? text)
     {

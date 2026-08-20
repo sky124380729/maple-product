@@ -29,8 +29,8 @@ public sealed class HudTextParserTests
         Assert.True(layout.MpText.X < layout.ExpText.X);
 
         HudFrameLayout physical = AdaptiveHudLayout.Resolve(2051, 1200);
-        Assert.InRange(physical.Identity.Y, 1145, 1165);
-        Assert.InRange(physical.HpText.Height, 40, 55);
+        Assert.InRange(physical.Identity.Y, 1135, 1145);
+        Assert.InRange(physical.HpText.Height, 55, 65);
     }
 
     [Fact]
@@ -74,5 +74,28 @@ public sealed class HudTextParserTests
         Assert.Equal("猎人", identity.Job);
         Assert.Equal("Pink丶Bin", identity.CharacterName);
         Assert.Equal(0.23, HudTextParser.ParseExperience("E)(P 30s0．23"));
+    }
+
+    [Fact]
+    public void Keeps_level_and_job_when_name_row_is_unreadable()
+    {
+        HudIdentity identity = HudTextParser.ParseIdentity("LV. @9! 猎 人 LV. 4 3 猖 人");
+
+        Assert.Equal(43, identity.Level);
+        Assert.Equal("猎人", identity.Job);
+        Assert.Null(identity.CharacterName);
+    }
+
+    [Fact]
+    public void Reassembles_split_latin_character_name_from_real_frame_ocr()
+    {
+        Assert.Equal("Pink丶Bin", HudTextParser.ExtractLatinName("LV. ． 4 3 猎 人 Pi n k 、 Bin"));
+        Assert.Equal("猎人", HudTextParser.ExtractJob("LV. ． 4 3 猖 人 Pi n k 、 Bin"));
+
+        HudIdentity identity = HudTextParser.ParseIdentity("LV. ． 4 3 猖 人 Pi n k 、 Bin");
+
+        Assert.Equal(43, identity.Level);
+        Assert.Equal("猎人", identity.Job);
+        Assert.Equal("Pink丶Bin", identity.CharacterName);
     }
 }
