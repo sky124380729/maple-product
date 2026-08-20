@@ -41,13 +41,15 @@ public sealed class OcrHudRecognitionProvider(IRegionTextRecognizer ocr) : IReco
             // The high-DPI client renders level and name on separate rows. Read
             // them independently so the chat ticker cannot contaminate identity.
             PixelRegion levelRegion = new(
-                (int)Math.Round(frame.Width * 0.235), layout.Identity.Y,
-                (int)Math.Round(frame.Width * 0.040), layout.Identity.Height);
+                (int)(frame.Width * 0.210),
+                (int)(frame.Height * 0.952),
+                (int)(frame.Width * 0.060),
+                Math.Max(1, (int)(frame.Height * 0.045)));
             PixelRegion nameRegion = new(
                 Math.Min(frame.Width - 1, (int)Math.Round(frame.Width * 0.265)),
-                layout.Identity.Y,
+                (int)(frame.Height * 0.952),
                 Math.Min(frame.Width - (int)Math.Round(frame.Width * 0.265), (int)Math.Round(frame.Width * 0.100)),
-                layout.Identity.Height);
+                Math.Max(1, (int)(frame.Height * 0.045)));
             levelText = await ocr.RecognizeAsync(frame, levelRegion, cancellationToken).ConfigureAwait(false);
             nameText = await ocr.RecognizeAsync(frame, nameRegion, cancellationToken).ConfigureAwait(false);
             identityText = $"{identityText} {levelText} {nameText}";
@@ -57,8 +59,8 @@ public sealed class OcrHudRecognitionProvider(IRegionTextRecognizer ocr) : IReco
         string expText = await ocr.RecognizeAsync(frame, layout.ExpText, cancellationToken).ConfigureAwait(false);
         HudIdentity identity = HudTextParser.ParseIdentity(identityText);
         HudIdentity levelIdentity = HudTextParser.ParseIdentity($"LV. {levelText}");
-        string? characterName = HudTextParser.ExtractLatinName(identityText)
-            ?? HudTextParser.ExtractLatinName(nameText)
+        string? characterName = HudTextParser.ExtractLatinName(nameText)
+            ?? HudTextParser.ExtractLatinName(identityText)
             ?? identity.CharacterName;
         string? job = HudTextParser.ExtractJob(identityText) ?? identity.Job;
         HudResource hp = HudTextParser.ParseResource(hpText);
