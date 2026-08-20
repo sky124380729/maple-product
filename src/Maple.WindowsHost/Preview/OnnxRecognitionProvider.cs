@@ -27,6 +27,7 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
     private readonly IRecognitionProvider hud;
     private readonly RecognitionModelManifest manifest;
     private readonly InferenceSession session;
+    private readonly RecognitionTargetStabilizer dropStabilizer = new();
 
     private OnnxRecognitionProvider(IRecognitionProvider hud, RecognitionModelManifest manifest, InferenceSession session)
     {
@@ -84,10 +85,21 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
                 manifest.NmsThreshold, manifest.InputWidth, manifest.InputHeight);
             AddDetections(detections, tileInfo.X, tileInfo.Y, tile, characters, monsters, drops);
         }
-        IReadOnlyList<RecognitionTarget> filteredMonsters = SuppressOverlaps(monsters);
         IReadOnlyList<RecognitionTarget> filteredCharacters = SuppressOverlaps(characters);
-        IReadOnlyList<RecognitionTarget> filteredDrops = SuppressOverlaps(drops);
         RecognitionTarget? selfCandidate = filteredCharacters.OrderBy(item => Math.Abs((item.X + item.Width / 2) - frame.Width / 2d)).FirstOrDefault();
+        IReadOnlyList<RecognitionTarget> filteredMonsters = SuppressOverlaps(
+            monsters.Where(item => RecognitionTargetFilter.IsPlausibleMonster(item, selfCandidate is null
+                ? null
+                : new SelfObservation(selfCandidate.X, selfCandidate.Y, selfCandidate.Width,
+                    selfCandidate.Height, null, selfCandidate.Confidence))).ToList());
+        IReadOnlyList<RecognitionTarget> plausibleDrops = drops
+            .Where(item => RecognitionTargetFilter.IsPlausibleDrop(item, selfCandidate is null
+                ? null
+                : new SelfObservation(selfCandidate.X, selfCandidate.Y, selfCandidate.Width,
+                    selfCandidate.Height, null, selfCandidate.Confidence)))
+            .ToArray();
+        IReadOnlyList<RecognitionTarget> filteredDrops = dropStabilizer.Update(
+            SuppressOverlaps(plausibleDrops.ToList()), frame.Sequence);
         SelfObservation? self = selfCandidate is null ? null : new SelfObservation(
             selfCandidate.X, selfCandidate.Y, selfCandidate.Width, selfCandidate.Height, null, selfCandidate.Confidence);
         IReadOnlyList<RecognitionTarget> otherPlayers = selfCandidate is null
