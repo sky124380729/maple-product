@@ -13,7 +13,7 @@ export function AdvancedParametersCollapse() {
           children: (
             <div className="parameter-grid">
               <Form.Item label="每侧最大累计偏移" name="maxLateralMoveMs" rules={rangeRule}>
-                <InputNumber min={80} max={5000} suffix="ms" />
+                <InputNumber min={1} max={5000} suffix="ms" />
               </Form.Item>
               <Form.Item label="移动按压最小值" name="moveHoldMinMs" rules={rangeRule}>
                 <InputNumber min={1} max={5000} suffix="ms" />
