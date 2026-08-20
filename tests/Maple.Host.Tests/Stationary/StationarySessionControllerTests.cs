@@ -65,6 +65,28 @@ public sealed class StationarySessionControllerTests
     }
 
     [Fact]
+    public async Task Stops_before_the_second_move_when_the_broker_misses_a_lease_deadline()
+    {
+        var actions = new RecordingActionSink(
+            failEvent: "Up:MoveLeft",
+            failCode: "KEY_LEASE_DEADLINE_MISSED");
+        var publisher = new RecordingPublisher();
+        var controller = CreateController(
+            actions,
+            publisher,
+            new AdvancingScheduler(),
+            new SequenceRandomSource(16, 20_001, 80, 30, 81, 80),
+            TestConfig() with { RestEnabled = false });
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, CancellationToken.None);
+
+        Assert.Equal(
+            ["Down:Attack", "Up:Attack", "Down:MoveLeft", "Up:MoveLeft", "ReleaseAll"],
+            actions.Events);
+        Assert.Equal("KEY_LEASE_DEADLINE_MISSED", publisher.States[^1].EarlyReleaseReason);
+    }
+
+    [Fact]
     public async Task Sends_the_sampled_hold_duration_as_the_broker_lease()
     {
         var actions = new RecordingActionSink();
@@ -283,7 +305,9 @@ public sealed class StationarySessionControllerTests
             random,
             publisher);
 
-    private sealed class RecordingActionSink(string? failEvent = null) : IStationaryActionSink
+    private sealed class RecordingActionSink(
+        string? failEvent = null,
+        string failCode = "KEY_UP_FAILED") : IStationaryActionSink
     {
         public List<string> Events { get; } = [];
         public List<int> Leases { get; } = [];
@@ -307,7 +331,7 @@ public sealed class StationarySessionControllerTests
         {
             Events.Add(value);
             return Task.FromResult(value == failEvent
-                ? InputActionResult.Fail("KEY_UP_FAILED")
+                ? InputActionResult.Fail(failCode)
                 : InputActionResult.Ok("OK"));
         }
     }
