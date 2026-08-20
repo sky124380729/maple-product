@@ -6,11 +6,11 @@
 
 当前 Host 使用 `Task.Delay(holdMs)` 后主动释放按键，Broker 只在 `250ms` watchdog 中检查租约。系统负载升高时，配置为 `25-49ms` 的方向键可能晚于计划上限释放，而移动规划器仍按抽样值累计偏移。窄平台上，逻辑偏移与游戏实际位移会因此失配；同时，仅按净偏移限制会让左、右交替后已消耗的方向预算被错误恢复。
 
-## 决策
+## 决策（回退记录）
 
-Broker 成为物理按键租约截止的唯一所有者。每次成功发送物理 `key-down` 后，Broker 同步登记开始时间、截止时间和 generation，并交给独立高优先级单调截止调度器。调度器不依赖命名管道读取循环、Host、heartbeat 或 `250ms` watchdog。
+严格物理租约截止实现已从当前版本回退：实机日志显示攻击收尾经常先收到 `KEY_LEASE_DEADLINE_MISSED`，导致第一轮直接停止。当前版本恢复 Host 计划时长 + Broker watchdog 兜底释放，并保留左右独立累计预算。物理硬截止需要重新设计后再实现，不能继续沿用会误判正常收尾的方案。
 
-到达截止时间时，Broker 在进程内直接发送物理 `key-up`。Host 随后发送幂等 `KeyUp` 确认结果：按期自动释放返回 `KEY_LEASE_EXPIRED`；Host 在截止前主动释放返回 `KEY_UP_SENT`；释放晚于截止返回 `KEY_LEASE_DEADLINE_MISSED`；物理释放失败返回 `KEY_LEASE_RELEASE_FAILED`。后两者拒绝请求，使现有控制器进入停止和 `ReleaseAll` 路径。
+当前版本由 Host 在计划保持时间结束后发送 `KeyUp`，Broker 对已释放按键返回幂等成功；断联、心跳超时和安全门异常仍由 Broker 兜底释放。
 
 ## 调度器
 

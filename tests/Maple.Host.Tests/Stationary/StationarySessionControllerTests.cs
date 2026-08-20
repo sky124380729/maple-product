@@ -65,28 +65,6 @@ public sealed class StationarySessionControllerTests
     }
 
     [Fact]
-    public async Task Stops_before_the_second_move_when_the_broker_misses_a_lease_deadline()
-    {
-        var actions = new RecordingActionSink(
-            failEvent: "Up:MoveLeft",
-            failCode: "KEY_LEASE_DEADLINE_MISSED");
-        var publisher = new RecordingPublisher();
-        var controller = CreateController(
-            actions,
-            publisher,
-            new AdvancingScheduler(),
-            new SequenceRandomSource(16, 20_001, 80, 30, 81, 80),
-            TestConfig() with { RestEnabled = false });
-
-        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, CancellationToken.None);
-
-        Assert.Equal(
-            ["Down:Attack", "Up:Attack", "Down:MoveLeft", "Up:MoveLeft", "ReleaseAll"],
-            actions.Events);
-        Assert.Equal("KEY_LEASE_DEADLINE_MISSED", publisher.States[^1].EarlyReleaseReason);
-    }
-
-    [Fact]
     public async Task Operator_cancellation_does_not_turn_a_late_key_up_into_an_error_stop()
     {
         using var cancellation = new CancellationTokenSource();
