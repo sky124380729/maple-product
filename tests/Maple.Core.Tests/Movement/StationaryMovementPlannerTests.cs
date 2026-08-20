@@ -51,6 +51,28 @@ public sealed class StationaryMovementPlannerTests
     }
 
     [Fact]
+    public void Limits_each_direction_cumulative_travel_instead_of_only_net_offset()
+    {
+        var planner = new StationaryMovementPlanner(new SequenceRandomSource(
+            125, 30, 125, 80,
+            125, 30, 125, 80));
+        planner.StartSession(MovementDirection.Right);
+        StationaryAttackConfig config = TestConfig();
+
+        MovementPlan first = planner.CreatePlan(config);
+        planner.ApplyCompletedPlan(first);
+        MovementPlan second = planner.CreatePlan(config);
+        planner.ApplyCompletedPlan(second);
+
+        Assert.Equal(250, planner.LeftTravelMs);
+        Assert.Equal(250, planner.RightTravelMs);
+        Assert.Equal(0, planner.RelativeOffsetMs);
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+            () => planner.CreatePlan(config));
+        Assert.Equal("INITIAL_FACING_BUDGET_EXHAUSTED", exception.Message);
+    }
+
+    [Fact]
     public void Does_not_swap_the_required_order_when_the_first_direction_has_no_budget()
     {
         var planner = new StationaryMovementPlanner(new SequenceRandomSource());

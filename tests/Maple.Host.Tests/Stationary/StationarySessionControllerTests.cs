@@ -87,6 +87,27 @@ public sealed class StationarySessionControllerTests
     }
 
     [Fact]
+    public async Task Operator_cancellation_does_not_turn_a_late_key_up_into_an_error_stop()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var actions = new RecordingActionSink(
+            failEvent: "Up:Attack",
+            failCode: "KEY_LEASE_DEADLINE_MISSED");
+        var publisher = new RecordingPublisher();
+        var controller = CreateController(
+            actions,
+            publisher,
+            new CancellingScheduler(cancellation),
+            new SequenceRandomSource(16, 20_001),
+            TestConfig() with { RestEnabled = false });
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, cancellation.Token);
+
+        Assert.Equal(["Down:Attack", "Up:Attack", "ReleaseAll"], actions.Events);
+        Assert.Equal("CANCELLED", publisher.States[^1].EarlyReleaseReason);
+    }
+
+    [Fact]
     public async Task Sends_the_sampled_hold_duration_as_the_broker_lease()
     {
         var actions = new RecordingActionSink();
@@ -291,7 +312,7 @@ public sealed class StationarySessionControllerTests
     private static StationarySessionController CreateController(
         RecordingActionSink actions,
         RecordingPublisher publisher,
-        AdvancingScheduler scheduler,
+        IMonotonicScheduler scheduler,
         IRandomSource random,
         StationaryAttackConfig config) =>
         new(
@@ -356,6 +377,24 @@ public sealed class StationarySessionControllerTests
     private sealed class FixedConfigProvider(StationaryAttackConfig config) : IStationaryConfigProvider
     {
         public StationaryAttackConfig GetValidatedSnapshot() => config;
+    }
+
+    private sealed class CancellingScheduler(CancellationTokenSource cancellation) : IMonotonicScheduler
+    {
+        public long NowMonoMs { get; private set; } = 10_000;
+        private bool cancelled;
+
+        public Task DelayAsync(int milliseconds, CancellationToken cancellationToken)
+        {
+            NowMonoMs += milliseconds;
+            if (!cancelled)
+            {
+                cancelled = true;
+                cancellation.Cancel();
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RejectAfterFirstCheckGate : IStationarySafetyGate

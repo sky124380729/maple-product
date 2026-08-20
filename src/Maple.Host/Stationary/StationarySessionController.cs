@@ -135,7 +135,8 @@ public sealed class StationarySessionController(
         finally
         {
             InputActionResult up = await actions.KeyUpAsync(action, CancellationToken.None);
-            if (!up.Success) throw new SessionStopException(up.Code);
+            if (!up.Success && !cancellationToken.IsCancellationRequested)
+                throw new SessionStopException(up.Code);
         }
     }
 
