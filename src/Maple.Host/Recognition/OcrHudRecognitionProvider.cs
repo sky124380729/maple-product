@@ -34,6 +34,21 @@ public sealed class OcrHudRecognitionProvider(IRegionTextRecognizer ocr) : IReco
     {
         HudFrameLayout layout = AdaptiveHudLayout.Resolve(frame.Width, frame.Height);
         string identityText = await ocr.RecognizeAsync(frame, layout.Identity, cancellationToken).ConfigureAwait(false);
+        if (frame.Height >= 900)
+        {
+            // The high-DPI client renders level and name on separate rows. Read
+            // them independently so the chat ticker cannot contaminate identity.
+            PixelRegion levelRegion = new(layout.Identity.X, layout.Identity.Y,
+                Math.Min(layout.Identity.Width, (int)Math.Round(frame.Width * 0.060)), layout.Identity.Height);
+            PixelRegion nameRegion = new(
+                Math.Min(frame.Width - 1, (int)Math.Round(frame.Width * 0.260)),
+                layout.Identity.Y,
+                Math.Min(frame.Width - (int)Math.Round(frame.Width * 0.260), (int)Math.Round(frame.Width * 0.105)),
+                layout.Identity.Height);
+            string levelText = await ocr.RecognizeAsync(frame, levelRegion, cancellationToken).ConfigureAwait(false);
+            string nameText = await ocr.RecognizeAsync(frame, nameRegion, cancellationToken).ConfigureAwait(false);
+            identityText = $"{identityText} {levelText} {nameText}";
+        }
         string hpText = await ocr.RecognizeAsync(frame, layout.HpText, cancellationToken).ConfigureAwait(false);
         string mpText = await ocr.RecognizeAsync(frame, layout.MpText, cancellationToken).ConfigureAwait(false);
         string expText = await ocr.RecognizeAsync(frame, layout.ExpText, cancellationToken).ConfigureAwait(false);

@@ -120,6 +120,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
                 lastFrameWidth = frame.Width;
                 lastFrameHeight = frame.Height;
                 recognition?.PushFrame(frame);
+                RenderRecognitionOverlay();
 
                 if (firstFrameAtMonoMs == 0) firstFrameAtMonoMs = frame.CapturedAtMonoMs;
                 if (lastSequence > 0 && frame.Sequence > lastSequence + 1)
@@ -203,37 +204,42 @@ public sealed class PreviewWindowHost : IAsyncDisposable
     {
         latestRecognition = snapshot;
         RecognitionSnapshotPublished?.Invoke(snapshot);
-        window?.Dispatcher.BeginInvoke(() =>
+        window?.Dispatcher.BeginInvoke(() => RenderRecognitionOverlay());
+    }
+
+    private void RenderRecognitionOverlay()
+    {
+        if (overlay is null || latestRecognition is null) return;
+        double viewportWidth = overlay.ActualWidth > 0 ? overlay.ActualWidth : image?.ActualWidth ?? 0;
+        double viewportHeight = overlay.ActualHeight > 0 ? overlay.ActualHeight : image?.ActualHeight ?? 0;
+        if (viewportWidth <= 0 || viewportHeight <= 0) return;
+        overlay.Children.Clear();
+        IReadOnlyList<RecognitionOverlayBox> boxes = RecognitionOverlayLayout.Create(
+            latestRecognition,
+            lastFrameWidth,
+            lastFrameHeight,
+            viewportWidth,
+            viewportHeight);
+        foreach (RecognitionOverlayBox target in boxes)
         {
-            if (overlay is null) return;
-            overlay.Children.Clear();
-            IReadOnlyList<RecognitionOverlayBox> boxes = RecognitionOverlayLayout.Create(
-                snapshot,
-                lastFrameWidth,
-                lastFrameHeight,
-                overlay.ActualWidth,
-                overlay.ActualHeight);
-            foreach (RecognitionOverlayBox target in boxes)
+            var box = new Border
             {
-                var box = new Border
+                BorderBrush = target.Kind == "monster"
+                    ? System.Windows.Media.Brushes.Red
+                    : System.Windows.Media.Brushes.LimeGreen,
+                BorderThickness = new Thickness(2),
+                Width = target.Width,
+                Height = target.Height,
+                Child = new TextBlock
                 {
-                    BorderBrush = target.Kind == "monster"
-                        ? System.Windows.Media.Brushes.Red
-                        : System.Windows.Media.Brushes.LimeGreen,
-                    BorderThickness = new Thickness(2),
-                    Width = target.Width,
-                    Height = target.Height,
-                    Child = new TextBlock
-                    {
-                        Text = $"{(target.Kind == "monster" ? "怪物" : "人物")} {target.Confidence:P0}",
-                        Foreground = System.Windows.Media.Brushes.White,
-                        Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(160, 0, 0, 0))
-                    }
-                };
-                Canvas.SetLeft(box, target.X);
-                Canvas.SetTop(box, target.Y);
-                overlay.Children.Add(box);
-            }
-        });
+                    Text = $"{(target.Kind == "monster" ? "怪物" : "人物")} {target.Confidence:P0}",
+                    Foreground = System.Windows.Media.Brushes.White,
+                    Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(160, 0, 0, 0))
+                }
+            };
+            Canvas.SetLeft(box, target.X);
+            Canvas.SetTop(box, target.Y);
+            overlay.Children.Add(box);
+        }
     }
 }

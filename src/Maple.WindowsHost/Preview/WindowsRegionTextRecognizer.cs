@@ -11,9 +11,14 @@ namespace Maple.WindowsHost.Preview;
 public sealed class WindowsRegionTextRecognizer : IRegionTextRecognizer
 {
     private readonly OcrEngine engine;
+    private readonly OcrEngine? latinEngine;
     private readonly SemaphoreSlim gate = new(1, 1);
 
-    private WindowsRegionTextRecognizer(OcrEngine engine) => this.engine = engine;
+    private WindowsRegionTextRecognizer(OcrEngine engine, OcrEngine? latinEngine)
+    {
+        this.engine = engine;
+        this.latinEngine = latinEngine;
+    }
 
     public static WindowsRegionTextRecognizer? TryCreate()
     {
@@ -23,7 +28,15 @@ public sealed class WindowsRegionTextRecognizer : IRegionTextRecognizer
             OcrEngine? selected = OcrEngine.IsLanguageSupported(language)
                 ? OcrEngine.TryCreateFromLanguage(language)
                 : OcrEngine.TryCreateFromUserProfileLanguages();
-            return selected is null ? null : new WindowsRegionTextRecognizer(selected);
+            OcrEngine? latin = null;
+            try
+            {
+                var english = new Language("en-US");
+                if (OcrEngine.IsLanguageSupported(english))
+                    latin = OcrEngine.TryCreateFromLanguage(english);
+            }
+            catch { }
+            return selected is null ? null : new WindowsRegionTextRecognizer(selected, latin);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException) { return null; }
     }
@@ -53,7 +66,13 @@ public sealed class WindowsRegionTextRecognizer : IRegionTextRecognizer
             using SoftwareBitmap bitmap = await decoder.GetSoftwareBitmapAsync(
                 BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied).AsTask(cancellationToken).ConfigureAwait(false);
             OcrResult result = await engine.RecognizeAsync(bitmap).AsTask(cancellationToken).ConfigureAwait(false);
-            return result.Text?.Trim() ?? string.Empty;
+            string primary = result.Text?.Trim() ?? string.Empty;
+            if (latinEngine is null) return primary;
+            OcrResult latinResult = await latinEngine.RecognizeAsync(bitmap).AsTask(cancellationToken).ConfigureAwait(false);
+            string latin = latinResult.Text?.Trim() ?? string.Empty;
+            return string.IsNullOrWhiteSpace(latin) || string.Equals(primary, latin, StringComparison.Ordinal)
+                ? primary
+                : $"{primary} {latin}";
         }
         finally { gate.Release(); }
     }

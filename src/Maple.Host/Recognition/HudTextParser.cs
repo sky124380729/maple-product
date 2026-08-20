@@ -13,8 +13,10 @@ public static partial class AdaptiveHudLayout
     public static HudFrameLayout Resolve(int width, int height)
     {
         if (width < 800 || height < 600) throw new ArgumentOutOfRangeException(nameof(width), "HUD_RESOLUTION_UNSUPPORTED");
-        double top = height >= 900 ? 0.93 : 0.952;
-        double regionHeight = height >= 900 ? 0.07 : 0.047;
+        // The client status bar sits below the chat ticker.  The latter is
+        // deliberately excluded because it contains arbitrary player text.
+        double top = height >= 900 ? 0.960 : 0.952;
+        double regionHeight = height >= 900 ? 0.040 : 0.047;
         return new HudFrameLayout(
             Region(width, height, 0.202, top, 0.165, regionHeight),
             Region(width, height, 0.365, top, 0.083, regionHeight),
@@ -44,8 +46,11 @@ public static partial class HudTextParser
     public static HudIdentity ParseIdentity(string? text)
     {
         string value = Regex.Replace(text ?? string.Empty, @"\s+", " ").Trim();
+        if (ContainsChatNoise(value)) return new HudIdentity(null, null, null);
         value = Regex.Replace(value, @"\s*[、丶，,]\s*", "丶");
         Match levelMatch = LevelPattern().Match(value);
+        if (!levelMatch.Success && Regex.IsMatch(value, @"(?i)L[VW]"))
+            return new HudIdentity(null, null, null);
         int? level = levelMatch.Success && int.TryParse(levelMatch.Groups[1].Value, out int number) ? number : null;
         string remainder = levelMatch.Success ? value.Remove(levelMatch.Index, levelMatch.Length).Trim() : value;
         string[] parts = remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -58,7 +63,7 @@ public static partial class HudTextParser
         return parts.Length switch
         {
             >= 2 => new HudIdentity(parts[^1], level is > 0 ? level : null, string.Join(' ', parts[..^1])),
-            1 => new HudIdentity(parts[0], level, null),
+            1 when parts[0].Any(character => character <= 127) => new HudIdentity(parts[0], level, null),
             _ => new HudIdentity(null, level, null)
         };
     }
@@ -67,10 +72,31 @@ public static partial class HudTextParser
     {
         string value = NormalizeOcrDigits(text);
         Match match = ResourcePattern().Match(value);
-        return match.Success
-            ? new HudResource(int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture), int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture))
+        if (!match.Success) return new HudResource(null, null);
+        string currentText = match.Groups[1].Value;
+        string maximumText = match.Groups[2].Value;
+        if (currentText[0] == '0'
+            && maximumText[0] == '1'
+            && currentText[1..] == maximumText[1..])
+            currentText = maximumText;
+        int current = int.Parse(currentText, CultureInfo.InvariantCulture);
+        int maximum = int.Parse(maximumText, CultureInfo.InvariantCulture);
+        if (maximumText.Length == currentText.Length + 1
+            && maximumText.EndsWith('1')
+            && maximum / 10 == current)
+            maximum /= 10;
+        return current <= maximum && maximum is > 0 and <= 10_000_000
+            ? new HudResource(current, maximum)
             : new HudResource(null, null);
     }
+
+    private static bool ContainsChatNoise(string value) =>
+        value.Contains("金币", StringComparison.Ordinal)
+        || value.Contains("加Q", StringComparison.OrdinalIgnoreCase)
+        || value.Contains("群", StringComparison.Ordinal)
+        || value.Contains("出金", StringComparison.Ordinal)
+        || value.Contains("R=", StringComparison.OrdinalIgnoreCase)
+        || value.Contains("小时", StringComparison.Ordinal);
 
     private static string NormalizeOcrDigits(string? text)
     {

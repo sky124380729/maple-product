@@ -29,12 +29,32 @@ public sealed class HudTextParserTests
         Assert.True(layout.MpText.X < layout.ExpText.X);
 
         HudFrameLayout physical = AdaptiveHudLayout.Resolve(2051, 1200);
-        Assert.InRange(physical.Identity.Y, 1110, 1135);
-        Assert.InRange(physical.HpText.Height, 80, 90);
+        Assert.InRange(physical.Identity.Y, 1145, 1165);
+        Assert.InRange(physical.HpText.Height, 40, 55);
+    }
+
+    [Fact]
+    public void Rejects_resource_ocr_when_current_exceeds_maximum()
+    {
+        HudResource resource = HudTextParser.ParseResource("广告 586 / 158");
+
+        Assert.Null(resource.Current);
+        Assert.Null(resource.Maximum);
+    }
+
+    [Fact]
+    public void Rejects_identity_text_when_level_marker_is_buried_in_chat_text()
+    {
+        HudIdentity identity = HudTextParser.ParseIdentity("逍遥大柜 出金 100R=300万金币 猎人 LV. 0");
+
+        Assert.Null(identity.CharacterName);
+        Assert.Null(identity.Job);
+        Assert.Null(identity.Level);
     }
 
     [Theory]
     [InlineData("HP [ 1 S86/1 S86]", 1586, 1586)]
+    [InlineData("HP [ 0 S86/1 S86]", 1586, 1586)]
     [InlineData("MP [ 3 引 / 3 引 ]", 991, 991)]
     [InlineData("HP [ 1 s86 ／ 1 s86 ]", 1586, 1586)]
     public void Repairs_common_ocr_spacing_and_character_substitutions(string text, int current, int maximum)

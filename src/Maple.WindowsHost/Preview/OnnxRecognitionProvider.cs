@@ -60,43 +60,83 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
     public async Task<RecognitionAnalysis> AnalyzeAsync(CapturedFrame frame, CancellationToken cancellationToken)
     {
         RecognitionAnalysis baseResult = await hud.AnalyzeAsync(frame, cancellationToken).ConfigureAwait(false);
-        float[] input = ToNchw(frame, manifest.InputWidth, manifest.InputHeight);
-        var tensor = new DenseTensor<float>(input, [1, 3, manifest.InputHeight, manifest.InputWidth]);
         string inputName = session.InputMetadata.Keys.Single();
-        using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> outputs = session.Run(
-            [NamedOnnxValue.CreateFromTensor(inputName, tensor)]);
-        Tensor<float> output = outputs.Single().AsTensor<float>();
-        int[] dimensions = output.Dimensions.ToArray();
-        int channels = 4 + manifest.Classes.Length;
-        int candidates = dimensions.Length == 3 && dimensions[1] == channels
-            ? dimensions[2]
-            : throw new InvalidDataException("MODEL_OUTPUT_SHAPE_INVALID");
-        IReadOnlyList<YoloDetection> detections = YoloTensorDecoder.DecodeChannelsFirst(
-            output.ToArray(), manifest.Classes, candidates, manifest.ConfidenceThreshold,
-            manifest.NmsThreshold, manifest.InputWidth, manifest.InputHeight);
-
         var characters = new List<RecognitionTarget>();
         var monsters = new List<RecognitionTarget>();
         var drops = new List<RecognitionTarget>();
+        foreach (RecognitionTile tileInfo in RecognitionTileLayout.Build(frame.Width, frame.Height))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CapturedFrame tile = CapturedFrameCropper.Crop(frame, tileInfo.X, tileInfo.Y, tileInfo.Width, tileInfo.Height);
+            // The reference packaged detector consumes OpenCV BGR tensors.
+            float[] input = ToBgrNchw(tile, manifest.InputWidth, manifest.InputHeight);
+            var tensor = new DenseTensor<float>(input, [1, 3, manifest.InputHeight, manifest.InputWidth]);
+            using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> outputs = session.Run(
+                [NamedOnnxValue.CreateFromTensor(inputName, tensor)]);
+            Tensor<float> output = outputs.Single().AsTensor<float>();
+            int[] dimensions = output.Dimensions.ToArray();
+            int channels = 4 + manifest.Classes.Length;
+            int candidates = dimensions.Length == 3 && dimensions[1] == channels
+                ? dimensions[2]
+                : throw new InvalidDataException("MODEL_OUTPUT_SHAPE_INVALID");
+            IReadOnlyList<YoloDetection> detections = YoloTensorDecoder.DecodeChannelsFirst(
+                output.ToArray(), manifest.Classes, candidates, 0.10,
+                manifest.NmsThreshold, manifest.InputWidth, manifest.InputHeight);
+            AddDetections(detections, tileInfo.X, tileInfo.Y, tile, characters, monsters, drops);
+        }
+        IReadOnlyList<RecognitionTarget> filteredMonsters = SuppressOverlaps(monsters);
+        IReadOnlyList<RecognitionTarget> filteredCharacters = SuppressOverlaps(characters);
+        IReadOnlyList<RecognitionTarget> filteredDrops = SuppressOverlaps(drops);
+        RecognitionTarget? selfCandidate = filteredCharacters.OrderBy(item => Math.Abs((item.X + item.Width / 2) - frame.Width / 2d)).FirstOrDefault();
+        SelfObservation? self = selfCandidate is null ? null : new SelfObservation(
+            selfCandidate.X, selfCandidate.Y, selfCandidate.Width, selfCandidate.Height, null, selfCandidate.Confidence);
+        IReadOnlyList<RecognitionTarget> otherPlayers = selfCandidate is null
+            ? []
+            : filteredCharacters.Where(item => !ReferenceEquals(item, selfCandidate)).Select(item => item with { Kind = "player" }).ToArray();
+        return baseResult with { Monsters = filteredMonsters, Drops = filteredDrops, OtherPlayers = otherPlayers, Self = self };
+    }
+
+    private void AddDetections(
+        IReadOnlyList<YoloDetection> detections, int offsetX, int offsetY, CapturedFrame tile,
+        List<RecognitionTarget> characters, List<RecognitionTarget> monsters,
+        List<RecognitionTarget> drops)
+    {
         foreach (YoloDetection detection in detections)
         {
             if (!manifest.ClassRoles.TryGetValue(detection.ClassName, out string? role)) continue;
+            double minimumConfidence = role == "characterCandidate" ? 0.10 : manifest.ConfidenceThreshold;
+            if (detection.Confidence < minimumConfidence) continue;
             var target = new RecognitionTarget(
-                detection.X * frame.Width, detection.Y * frame.Height,
-                detection.Width * frame.Width, detection.Height * frame.Height,
+                offsetX + detection.X * tile.Width, offsetY + detection.Y * tile.Height,
+                detection.Width * tile.Width, detection.Height * tile.Height,
                 role == "monster" ? "monster" : role == "drop" ? "drop" : "character",
                 detection.Confidence);
             if (role == "monster") monsters.Add(target);
             else if (role == "drop") drops.Add(target);
             else if (role == "characterCandidate") characters.Add(target);
         }
-        RecognitionTarget? selfCandidate = characters.OrderBy(item => Math.Abs((item.X + item.Width / 2) - frame.Width / 2d)).FirstOrDefault();
-        SelfObservation? self = selfCandidate is null ? null : new SelfObservation(
-            selfCandidate.X, selfCandidate.Y, selfCandidate.Width, selfCandidate.Height, null, selfCandidate.Confidence);
-        IReadOnlyList<RecognitionTarget> otherPlayers = selfCandidate is null
-            ? []
-            : characters.Where(item => !ReferenceEquals(item, selfCandidate)).Select(item => item with { Kind = "player" }).ToArray();
-        return baseResult with { Monsters = monsters, Drops = drops, OtherPlayers = otherPlayers, Self = self };
+    }
+
+    private static IReadOnlyList<RecognitionTarget> SuppressOverlaps(List<RecognitionTarget> candidates)
+    {
+        var kept = new List<RecognitionTarget>();
+        foreach (RecognitionTarget candidate in candidates.OrderByDescending(item => item.Confidence))
+        {
+            if (kept.Any(item => IoU(item, candidate) > 0.45)) continue;
+            kept.Add(candidate);
+        }
+        return kept;
+    }
+
+    private static double IoU(RecognitionTarget first, RecognitionTarget second)
+    {
+        double left = Math.Max(first.X, second.X);
+        double top = Math.Max(first.Y, second.Y);
+        double right = Math.Min(first.X + first.Width, second.X + second.Width);
+        double bottom = Math.Min(first.Y + first.Height, second.Y + second.Height);
+        double intersection = Math.Max(0, right - left) * Math.Max(0, bottom - top);
+        double union = first.Width * first.Height + second.Width * second.Height - intersection;
+        return union <= 0 ? 0 : intersection / union;
     }
 
     public ValueTask DisposeAsync()
@@ -120,6 +160,26 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
                 output[target] = pixels[source + 2] / 255f;
                 output[width * height + target] = pixels[source + 1] / 255f;
                 output[2 * width * height + target] = pixels[source] / 255f;
+            }
+        }
+        return output;
+    }
+
+    private static float[] ToBgrNchw(CapturedFrame frame, int width, int height)
+    {
+        float[] output = new float[3 * width * height];
+        ReadOnlySpan<byte> pixels = frame.BgraPixels.Span;
+        for (int y = 0; y < height; y++)
+        {
+            int sourceY = Math.Min(frame.Height - 1, y * frame.Height / height);
+            for (int x = 0; x < width; x++)
+            {
+                int sourceX = Math.Min(frame.Width - 1, x * frame.Width / width);
+                int source = sourceY * frame.Stride + sourceX * 4;
+                int target = y * width + x;
+                output[target] = pixels[source] / 255f;
+                output[width * height + target] = pixels[source + 1] / 255f;
+                output[2 * width * height + target] = pixels[source + 2] / 255f;
             }
         }
         return output;
