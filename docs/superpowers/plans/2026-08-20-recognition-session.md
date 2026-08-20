@@ -17,7 +17,7 @@
 - Create: `tests/Maple.Host.Tests/Recognition/RecognitionContractsTests.cs`
 - Modify: `src/Maple.Host/Maple.Host.csproj` only if a project reference is required (none expected)
 
-- [ ] **Step 1: Write failing tests for snapshot safety and stale health**
+- [x] **Step 1: Write failing tests for snapshot safety and stale health**
 
 ```csharp
 [Fact]
@@ -33,17 +33,17 @@ public void SnapshotCopiesCollectionsAndMarksOldFramesStale()
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails**
+- [x] **Step 2: Run the focused test and verify it fails**
 
 Run: `dotnet test tests/Maple.Host.Tests/Maple.Host.Tests.csproj --filter FullyQualifiedName~RecognitionContractsTests --no-restore`
 
 Expected: FAIL because `RecognitionSnapshot`, `HudObservation`, and `RecognitionTarget` do not exist.
 
-- [ ] **Step 3: Implement the contracts**
+- [x] **Step 3: Implement the contracts**
 
 Define `RecognitionHealth` (`Disabled`, `Starting`, `Running`, `Stale`, `Faulted`, `TargetLost`), `RecognitionTarget`, `SelfObservation`, `HudObservation`, `MapObservation`, `RecognitionSnapshot`, and a `RecognitionSnapshotStore` that publishes immutable copies. Include `SessionId`, `WindowIdentity`, source sequence/timestamps, frame age, confidence values, and a stable fault code. Collections must be copied into read-only arrays in the constructor/factory.
 
-- [ ] **Step 4: Run the focused test and verify it passes**
+- [x] **Step 4: Run the focused test and verify it passes**
 
 Run the same command; expected: PASS.
 
@@ -62,25 +62,25 @@ git commit -m "feat: add recognition snapshot contracts"
 - Create: `src/Maple.Host/Recognition/DiagnosticRecognitionProvider.cs`
 - Create: `tests/Maple.Host.Tests/Recognition/RecognitionSessionTests.cs`
 
-- [ ] **Step 1: Write failing lifecycle tests**
+- [x] **Step 1: Write failing lifecycle tests**
 
 Cover these exact cases with a fake `IFrameCaptureSource` and provider: two leases call `StartAsync` once; releasing one lease keeps capture alive; releasing the last lease calls `StopAsync` once; duplicate release is harmless; a frame is processed once and published with monotonically increasing sequence; disposing waits for an in-flight provider call; provider exceptions publish `Faulted` without escaping the capture callback.
 
-- [ ] **Step 2: Run the focused tests and verify they fail**
+- [x] **Step 2: Run the focused tests and verify they fail**
 
 Run: `dotnet test tests/Maple.Host.Tests/Maple.Host.Tests.csproj --filter FullyQualifiedName~RecognitionSessionTests --no-restore`
 
 Expected: FAIL because the session and provider interfaces are missing.
 
-- [ ] **Step 3: Implement capture, backpressure, and leases**
+- [x] **Step 3: Implement capture, backpressure, and leases**
 
 `RecognitionSession.AcquireAsync(RecognitionLeaseKind kind, WindowIdentity target, CancellationToken)` must reuse one capture source per target. Keep only the newest frame with an interlocked exchange; serialize provider execution with a single worker; cancel and await that worker during final release. A lease implements `IAsyncDisposable` and releases exactly once. Ignore preview-only frames when recognition is disabled, but keep the existing preview capture path available.
 
-- [ ] **Step 4: Add the diagnostic provider**
+- [x] **Step 4: Add the diagnostic provider**
 
 `DiagnosticRecognitionProvider` returns a valid snapshot with `Running` health, empty target arrays, and HUD fields marked unavailable. It must preserve frame dimensions/timestamps so the preview can prove the pipeline is live before model adapters are added. Keep provider interfaces replaceable for OpenCV/YOLO/OCR implementations.
 
-- [ ] **Step 5: Run the focused tests and verify they pass**
+- [x] **Step 5: Run the focused tests and verify they pass**
 
 Run the same command; expected: PASS with no leaked fake capture sessions.
 
@@ -102,21 +102,21 @@ git commit -m "feat: add shared recognition session leases"
 - Create: `client/src/components/RecognitionToggle.tsx`
 - Test: `client/src/pages/StationaryAttackPage.test.tsx`
 
-- [ ] **Step 1: Write the failing UI/config tests**
+- [x] **Step 1: Write the failing UI/config tests**
 
 Assert that `recognition.enabled` defaults to `false`, JSON round-trips the property in camelCase, the toggle emits `config.save` with the new value, and starting/stopping does not implicitly flip the setting.
 
-- [ ] **Step 2: Run the focused React tests and verify they fail**
+- [x] **Step 2: Run the focused React tests and verify they fail**
 
 Run: `npm --prefix client test -- --run src/pages/StationaryAttackPage.test.tsx`
 
 Expected: FAIL because the recognition field and control are absent.
 
-- [ ] **Step 3: Implement the opt-in configuration and bridge events**
+- [x] **Step 3: Implement the opt-in configuration and bridge events**
 
 Add a nested `RecognitionConfig { Enabled }` with a safe disabled default. Extend the existing config serialization and bridge message types. Add `recognition.status` and `recognition.snapshot` messages, carrying only metadata/HUD/target summaries, never raw frame pixels.
 
-- [ ] **Step 4: Run the focused React tests and verify they pass**
+- [x] **Step 4: Run the focused React tests and verify they pass**
 
 Run the same command; expected: PASS.
 

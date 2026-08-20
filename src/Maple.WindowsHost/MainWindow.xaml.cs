@@ -10,6 +10,7 @@ using Maple.Core.Triggers;
 using Maple.Host.Broker;
 using Maple.Host.Configuration;
 using Maple.Host.Diagnostics;
+using Maple.Host.Recognition;
 using Maple.Host.Safety;
 using Maple.Host.Stationary;
 using Maple.Host.Windows;
@@ -40,6 +41,8 @@ public partial class MainWindow : Window
     private IWindowLocator? windowLocator;
     private WindowIdentity? boundTarget;
     private string? requestedStopReason;
+    private RecognitionSession? recognitionSession;
+    private IAsyncDisposable? recognitionLease;
 
     public MainWindow()
     {
@@ -185,6 +188,16 @@ public partial class MainWindow : Window
             new AbnormalTerminationRecord(prepared.SessionId, "SESSION_IN_PROGRESS", DateTimeOffset.UtcNow),
             lifetime.Token);
         connection.SetAttackKey(config.AttackKey);
+        if (config.RecognitionEnabled)
+        {
+            recognitionSession ??= new RecognitionSession(
+                new Preview.WindowsGraphicsCaptureSource(),
+                new DiagnosticRecognitionProvider());
+            recognitionLease = await recognitionSession.AcquireAsync(
+                RecognitionLeaseKind.Stationary,
+                prepared.Target!,
+                lifetime.Token);
+        }
         heartbeatLoop = new BrokerHeartbeatLoop(connection);
         BrokerHeartbeatLoop activeHeartbeat = heartbeatLoop;
         heartbeatLoop.Start();
@@ -239,6 +252,16 @@ public partial class MainWindow : Window
         cancellationToDispose?.Cancel();
         cancellationToDispose?.Dispose();
         if (connectionToDispose is not null) await connectionToDispose.ReleaseAllAsync(CancellationToken.None);
+        if (recognitionLease is not null)
+        {
+            await recognitionLease.DisposeAsync();
+            recognitionLease = null;
+        }
+        if (recognitionSession is not null && connectionToDispose is not null)
+        {
+            await recognitionSession.DisposeAsync();
+            recognitionSession = null;
+        }
         if (heartbeatToDispose is not null) await heartbeatToDispose.DisposeAsync();
         if (connectionToDispose is not null) await connectionToDispose.DisposeAsync();
         boundTarget = null;
@@ -268,6 +291,16 @@ public partial class MainWindow : Window
         if (ReferenceEquals(heartbeatLoop, completedHeartbeat)) heartbeatLoop = null;
         if (ReferenceEquals(sessionCancellation, completedCancellation)) sessionCancellation = null;
         await completedConnection.ReleaseAllAsync(CancellationToken.None);
+        if (recognitionLease is not null)
+        {
+            await recognitionLease.DisposeAsync();
+            recognitionLease = null;
+        }
+        if (recognitionSession is not null)
+        {
+            await recognitionSession.DisposeAsync();
+            recognitionSession = null;
+        }
         await completedHeartbeat.DisposeAsync();
         await completedConnection.DisposeAsync();
         completedCancellation.Dispose();
@@ -292,7 +325,7 @@ public partial class MainWindow : Window
         }
 
         previewHost ??= new Preview.PreviewWindowHost();
-        await previewHost.ShowAsync(targetResolution.Target.Hwnd, lifetime.Token);
+        await previewHost.ShowAsync(targetResolution.Target.Hwnd, lifetime.Token, loadedConfig.Config.RecognitionEnabled);
     }
 
     private void PublishLoadedConfig()

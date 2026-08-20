@@ -40,6 +40,7 @@ public sealed record StationaryAttackConfig
     public int RestMinMs { get; init; } = 2_000;
     public int RestMaxMs { get; init; } = 5_000;
     public AttackTriggerMode AttackTriggerMode { get; init; } = AttackTriggerMode.Always;
+    public bool RecognitionEnabled { get; init; }
 
     public static StationaryAttackConfig Default { get; } = new();
 }

@@ -47,6 +47,7 @@ export interface StationaryAttackConfig {
   restMinMs: number
   restMaxMs: number
   attackTriggerMode: 'always' | 'monsterInRange'
+  recognitionEnabled: boolean
 }
 
 export const safeDefaults: StationaryAttackConfig = {
@@ -73,4 +74,5 @@ export const safeDefaults: StationaryAttackConfig = {
   restMinMs: 2000,
   restMaxMs: 5000,
   attackTriggerMode: 'always',
+  recognitionEnabled: false,
 }

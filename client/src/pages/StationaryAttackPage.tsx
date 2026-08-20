@@ -16,6 +16,7 @@ import { AttackModeField } from '../components/AttackModeField'
 import { AttackBandsEditor } from '../components/AttackBandsEditor'
 import { AdvancedParametersCollapse } from '../components/AdvancedParametersCollapse'
 import { SessionStatusPanel } from '../components/SessionStatusPanel'
+import { RecognitionToggle } from '../components/RecognitionToggle'
 import { postBridgeCommand, subscribeBridgeMessages } from '../bridge/bridge'
 import { safeDefaults, type StationaryAttackConfig } from '../bridge/types'
 import { hostErrorMessage, validateStationaryConfig, type ConfigValidationError } from '../bridge/configValidation'
@@ -191,6 +192,7 @@ export function StationaryAttackPage() {
               />
 
               <AttackModeField />
+              <RecognitionToggle />
 
               <div className="basic-grid">
                 <Form.Item label="攻击键" name="attackKey" rules={[{ required: true }]}>

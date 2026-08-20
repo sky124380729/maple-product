@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Maple.Host.Preview;
+using Maple.Host.Recognition;
 using WpfImage = System.Windows.Controls.Image;
 
 namespace Maple.WindowsHost.Preview;
@@ -12,7 +13,10 @@ public sealed class PreviewWindowHost : IAsyncDisposable
     private Window? window;
     private WpfImage? image;
     private TextBlock? diagnostics;
+    private Canvas? overlay;
     private PreviewSession? session;
+    private RecognitionSession? recognition;
+    private IAsyncDisposable? recognitionLease;
     private long firstFrameAtMonoMs;
     private long lastSequence;
     private long displayedFrames;
@@ -23,12 +27,13 @@ public sealed class PreviewWindowHost : IAsyncDisposable
 
     public void Show() => _ = ShowAsync(0, CancellationToken.None);
 
-    public async Task ShowAsync(long hwnd, CancellationToken cancellationToken)
+    public async Task ShowAsync(long hwnd, CancellationToken cancellationToken, bool recognitionEnabled = false)
     {
         if (window is { IsVisible: true })
         {
             window.Activate();
             await session!.StartAsync(hwnd, cancellationToken);
+            await SetRecognitionAsync(hwnd, recognitionEnabled, cancellationToken);
             return;
         }
 
@@ -39,10 +44,14 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             Foreground = System.Windows.Media.Brushes.White,
             Margin = new Thickness(12, 7, 12, 7)
         };
+        overlay = new Canvas { IsHitTestVisible = false };
         var grid = new Grid();
         grid.RowDefinitions.Add(new RowDefinition());
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.Children.Add(image);
+        var imageLayer = new Grid();
+        imageLayer.Children.Add(image);
+        imageLayer.Children.Add(overlay);
+        grid.Children.Add(imageLayer);
         var diagnosticsBar = new Border
         {
             Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(224, 20, 25, 24)),
@@ -63,10 +72,13 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         };
         window.Closed += OnClosed;
         session = new PreviewSession(new WindowsGraphicsCaptureSource());
+        recognition = new RecognitionSession(new DiagnosticRecognitionProvider());
+        recognition.SnapshotPublished += OnRecognitionSnapshot;
         session.FrameArrived += OnFrameArrived;
         session.Faulted += OnFaulted;
         window.Show();
         await session.StartAsync(hwnd, cancellationToken);
+        await SetRecognitionAsync(hwnd, recognitionEnabled, cancellationToken);
     }
 
     public async ValueTask DisposeAsync()
@@ -97,6 +109,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
                     frame.Stride,
                     0);
                 image.Source = bitmap;
+                recognition?.PushFrame(frame);
 
                 if (firstFrameAtMonoMs == 0) firstFrameAtMonoMs = frame.CapturedAtMonoMs;
                 if (lastSequence > 0 && frame.Sequence > lastSequence + 1)
@@ -137,12 +150,61 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             activeSession.Faulted -= OnFaulted;
             await activeSession.DisposeAsync();
         }
+        if (recognitionLease is not null)
+        {
+            await recognitionLease.DisposeAsync();
+            recognitionLease = null;
+        }
+        if (recognition is not null)
+        {
+            recognition.SnapshotPublished -= OnRecognitionSnapshot;
+            await recognition.DisposeAsync();
+            recognition = null;
+        }
         image = null;
+        overlay = null;
         diagnostics = null;
         firstFrameAtMonoMs = 0;
         lastSequence = 0;
         displayedFrames = 0;
         droppedFrames = 0;
         renderPending = 0;
+    }
+
+    private async Task SetRecognitionAsync(long hwnd, bool enabled, CancellationToken cancellationToken)
+    {
+        if (!enabled || recognition is null) return;
+        recognitionLease ??= await recognition.AcquireAsync(
+            RecognitionLeaseKind.Preview,
+            new Maple.Host.Windows.WindowIdentity(hwnd, 0, string.Empty, 0),
+            cancellationToken);
+    }
+
+    private void OnRecognitionSnapshot(RecognitionSnapshot snapshot)
+    {
+        window?.Dispatcher.BeginInvoke(() =>
+        {
+            if (diagnostics is null) return;
+            string hp = snapshot.Hud.HpPercent is double hpValue ? $"HP {hpValue:P0}" : "HP -";
+            string mp = snapshot.Hud.MpPercent is double mpValue ? $"MP {mpValue:P0}" : "MP -";
+            string exp = snapshot.Hud.ExpPercent is double expValue ? $"EXP {expValue:P1}" : "EXP -";
+            diagnostics.Text = $"识别 {snapshot.Health}   {hp}   {mp}   {exp}   怪物 {snapshot.Monsters.Count}   掉落 {snapshot.Drops.Count}   玩家 {snapshot.OtherPlayers.Count}   Frame age {snapshot.FrameAgeMs}ms";
+            if (overlay is null) return;
+            overlay.Children.Clear();
+            foreach (var target in snapshot.Monsters.Concat(snapshot.Drops).Concat(snapshot.OtherPlayers))
+            {
+                var box = new Border
+                {
+                    BorderBrush = target.Kind == "monster" ? System.Windows.Media.Brushes.Red : System.Windows.Media.Brushes.Cyan,
+                    BorderThickness = new Thickness(2),
+                    Width = target.Width,
+                    Height = target.Height,
+                    Child = new TextBlock { Text = $"{target.Kind} {target.Confidence:P0}", Foreground = System.Windows.Media.Brushes.White }
+                };
+                Canvas.SetLeft(box, target.X);
+                Canvas.SetTop(box, target.Y);
+                overlay.Children.Add(box);
+            }
+        });
     }
 }
