@@ -153,9 +153,15 @@ public static partial class HudTextParser
     public static double? ParseExperience(string? text)
     {
         string value = (text ?? string.Empty).Replace('。', '.').Replace('．', '.');
+        value = Regex.Replace(value, @"\s*([.,])\s*", "$1");
         MatchCollection matches = PercentPattern().Matches(value);
         if (matches.Count > 0) return double.Parse(matches[^1].Groups[1].Value, CultureInfo.InvariantCulture);
         MatchCollection decimals = Regex.Matches(value, @"(\d+[\.,]\d+)");
-        return decimals.Count == 0 ? null : double.Parse(decimals[^1].Groups[1].Value.Replace(',', '.'), CultureInfo.InvariantCulture);
+        if (decimals.Count > 0)
+            return double.Parse(decimals[^1].Groups[1].Value.Replace(',', '.'), CultureInfo.InvariantCulture);
+        Match fractional = Regex.Match(value, @"[.,](\d{1,2})(?!\d)");
+        return fractional.Success
+            ? double.Parse($"0.{fractional.Groups[1].Value}", CultureInfo.InvariantCulture)
+            : null;
     }
 }
