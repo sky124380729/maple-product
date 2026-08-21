@@ -10,10 +10,23 @@ public enum StationaryInputAction
     MoveRight
 }
 
-public sealed record InputActionResult(bool Success, string Code)
+public sealed record InputActionResult(
+    bool Success,
+    string Code,
+    int? ActualHoldMs = null,
+    int? ReleaseLatenessMs = null)
 {
-    public static InputActionResult Ok(string code) => new(true, code);
-    public static InputActionResult Fail(string code) => new(false, code);
+    public static InputActionResult Ok(
+        string code,
+        int? actualHoldMs = null,
+        int? releaseLatenessMs = null) =>
+        new(true, code, actualHoldMs, releaseLatenessMs);
+
+    public static InputActionResult Fail(
+        string code,
+        int? actualHoldMs = null,
+        int? releaseLatenessMs = null) =>
+        new(false, code, actualHoldMs, releaseLatenessMs);
 }
 
 public sealed record SafetyCheckResult(bool Success, string Code)

@@ -10,6 +10,18 @@ namespace Maple.Host.Tests.Stationary;
 public sealed class StationarySessionControllerTests
 {
     [Fact]
+    public void Input_action_result_carries_broker_movement_timing()
+    {
+        InputActionResult result = InputActionResult.Ok(
+            "KEY_ALREADY_UP",
+            actualHoldMs: 46,
+            releaseLatenessMs: 6);
+
+        Assert.Equal(46, result.ActualHoldMs);
+        Assert.Equal(6, result.ReleaseLatenessMs);
+    }
+
+    [Fact]
     public async Task Runs_one_complete_cycle_in_strict_key_order()
     {
         var actions = new RecordingActionSink();

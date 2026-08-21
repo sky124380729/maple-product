@@ -2,7 +2,7 @@ namespace Maple.Core.Broker;
 
 public static class BrokerProtocol
 {
-    public const int Version = 1;
+    public const int Version = 2;
 }
 
 public enum BrokerCommandKind
@@ -32,7 +32,13 @@ public sealed record BrokerRequest(
     string? Key,
     int LeaseMs);
 
-public sealed record BrokerResponse(int ProtocolVersion, long Sequence, bool Accepted, string Code);
+public sealed record BrokerResponse(
+    int ProtocolVersion,
+    long Sequence,
+    bool Accepted,
+    string Code,
+    int? ActualHoldMs = null,
+    int? ReleaseLatenessMs = null);
 
 public sealed record BrokerHandshake(
     int ProtocolVersion,

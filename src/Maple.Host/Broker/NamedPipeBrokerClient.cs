@@ -158,8 +158,11 @@ public sealed class NamedPipeBrokerClient : IBrokerConnection
             cancellationToken);
         BrokerResponse? response = await BrokerWireCodec.ReadAsync<BrokerResponse>(pipe, cancellationToken);
         return response is { Accepted: true }
-            ? InputActionResult.Ok(response.Code)
-            : InputActionResult.Fail(response?.Code ?? "BROKER_RESPONSE_INVALID");
+            ? InputActionResult.Ok(response.Code, response.ActualHoldMs, response.ReleaseLatenessMs)
+            : InputActionResult.Fail(
+                response?.Code ?? "BROKER_RESPONSE_INVALID",
+                response?.ActualHoldMs,
+                response?.ReleaseLatenessMs);
     }
 
     private string KeyFor(StationaryInputAction action) => action switch
