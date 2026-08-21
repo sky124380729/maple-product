@@ -136,6 +136,7 @@
 下列情况立即取消计划、尝试释放当前键、执行 `ReleaseAll` 并停止：
 
 - `MAP_PACKAGE_INVALID`：包加载或结构校验失败。
+- `MAP_PACKAGE_CHANGED`：会话固定的地图包哈希在运行期间发生变化。
 - `MAP_NAME_MISMATCH`：文件名与包内名称不一致。
 - `MAP_VIEWPORT_MISMATCH`：包内 ROI 不适用于当前捕获尺寸。
 - `MAP_MISMATCH`：当前小地图不再匹配所选包。
