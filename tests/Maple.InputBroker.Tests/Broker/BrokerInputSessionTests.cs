@@ -10,7 +10,7 @@ public sealed class BrokerInputSessionTests
     {
         var sender = new RecordingKeySender();
         var clock = new FakeClock();
-        var session = new BrokerInputSession(sender, clock, new AlwaysSafeTarget(), heartbeatTimeoutMs: 2_000);
+        var session = CreateSession(sender, clock);
         session.Arm(Target(), "secret");
 
         BrokerResponse accepted = await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.Attack, "Ctrl", 60_000));
@@ -25,7 +25,7 @@ public sealed class BrokerInputSessionTests
     public async Task Duplicate_key_down_refreshes_lease_without_repeating_physical_key_down()
     {
         var sender = new RecordingKeySender();
-        var session = new BrokerInputSession(sender, new FakeClock(), new AlwaysSafeTarget(), 2_000);
+        var session = CreateSession(sender);
         session.Arm(Target(), "secret");
 
         await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.Attack, "Ctrl", 10_000));
@@ -35,11 +35,61 @@ public sealed class BrokerInputSessionTests
     }
 
     [Fact]
+    public async Task Movement_deadline_releases_the_key_and_late_host_key_up_is_idempotent()
+    {
+        var sender = new RecordingKeySender();
+        var clock = new FakeClock { NowMonoMs = 100 };
+        var deadlines = new ManualMovementLeaseScheduler();
+        var session = CreateSession(sender, clock, deadlines);
+        session.Arm(Target(), "secret");
+
+        await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.MoveLeft, "Left", 25));
+        Assert.Equal(125, deadlines.CurrentDeadline(BrokerLogicalAction.MoveLeft));
+        clock.NowMonoMs = 130;
+        deadlines.Trigger(BrokerLogicalAction.MoveLeft);
+        BrokerResponse keyUp = await session.HandleAsync(
+            Request(2, BrokerCommandKind.KeyUp, BrokerLogicalAction.MoveLeft, "Left", 0));
+
+        Assert.True(keyUp.Accepted);
+        Assert.Equal("KEY_ALREADY_UP", keyUp.Code);
+        Assert.Equal(["Down:Left", "Up:Left"], sender.Events);
+    }
+
+    [Fact]
+    public async Task Attack_does_not_register_a_short_movement_deadline()
+    {
+        var deadlines = new ManualMovementLeaseScheduler();
+        var session = CreateSession(new RecordingKeySender(), deadlines: deadlines);
+        session.Arm(Target(), "secret");
+
+        await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.Attack, "Ctrl", 1_000));
+
+        Assert.False(deadlines.IsScheduled(BrokerLogicalAction.Attack));
+    }
+
+    [Fact]
+    public async Task Explicit_movement_key_up_cancels_the_deadline()
+    {
+        var sender = new RecordingKeySender();
+        var deadlines = new ManualMovementLeaseScheduler();
+        var session = CreateSession(sender, deadlines: deadlines);
+        session.Arm(Target(), "secret");
+        await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.MoveRight, "Right", 49));
+
+        BrokerResponse keyUp = await session.HandleAsync(
+            Request(2, BrokerCommandKind.KeyUp, BrokerLogicalAction.MoveRight, "Right", 0));
+
+        Assert.True(keyUp.Accepted);
+        Assert.False(deadlines.IsScheduled(BrokerLogicalAction.MoveRight));
+        Assert.Equal(["Down:Right", "Up:Right"], sender.Events);
+    }
+
+    [Fact]
     public async Task Watchdog_releases_active_keys_after_heartbeat_timeout()
     {
         var sender = new RecordingKeySender();
         var clock = new FakeClock();
-        var session = new BrokerInputSession(sender, clock, new AlwaysSafeTarget(), 2_000);
+        var session = CreateSession(sender, clock);
         session.Arm(Target(), "secret");
         await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.Attack, "Ctrl", 10_000));
 
@@ -54,7 +104,7 @@ public sealed class BrokerInputSessionTests
     public async Task Release_all_is_idempotent()
     {
         var sender = new RecordingKeySender();
-        var session = new BrokerInputSession(sender, new FakeClock(), new AlwaysSafeTarget(), 2_000);
+        var session = CreateSession(sender);
         session.Arm(Target(), "secret");
         await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.MoveLeft, "Left", 100));
 
@@ -71,7 +121,7 @@ public sealed class BrokerInputSessionTests
     {
         var sender = new RecordingKeySender();
         var safety = new MutableTargetSafety();
-        var session = new BrokerInputSession(sender, new FakeClock(), safety, 2_000);
+        var session = CreateSession(sender, safety: safety);
         session.Arm(Target(), "secret");
         await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.Attack, "Ctrl", 10_000));
         safety.Valid = false;
@@ -90,7 +140,7 @@ public sealed class BrokerInputSessionTests
     {
         var sender = new RecordingKeySender();
         var clock = new FakeClock();
-        var session = new BrokerInputSession(sender, clock, new AlwaysSafeTarget(), 2_000);
+        var session = CreateSession(sender, clock);
         session.Arm(Target(), "secret");
         await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.Attack, "Ctrl", 100));
 
@@ -112,7 +162,7 @@ public sealed class BrokerInputSessionTests
     {
         var sender = new RecordingKeySender();
         var safety = new MutableTargetSafety();
-        var session = new BrokerInputSession(sender, new FakeClock(), safety, 2_000);
+        var session = CreateSession(sender, safety: safety);
         session.Arm(Target(), "secret");
         await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.Attack, "Ctrl", 10_000));
         safety.Valid = false;
@@ -129,7 +179,7 @@ public sealed class BrokerInputSessionTests
     public async Task Failed_key_release_stays_tracked_until_a_later_release_all_succeeds()
     {
         var sender = new FailingKeyUpSender(failures: 2);
-        var session = new BrokerInputSession(sender, new FakeClock(), new AlwaysSafeTarget(), 2_000);
+        var session = CreateSession(sender);
         session.Arm(Target(), "secret");
         await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.Attack, "Ctrl", 10_000));
 
@@ -149,7 +199,7 @@ public sealed class BrokerInputSessionTests
     {
         var sender = new RecordingKeySender();
         var clock = new FakeClock();
-        var session = new BrokerInputSession(sender, clock, new AlwaysSafeTarget(), 2_000);
+        var session = CreateSession(sender, clock);
         session.Arm(Target(), "secret");
         await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.Attack, "Ctrl", 10_000));
 
@@ -169,6 +219,18 @@ public sealed class BrokerInputSessionTests
 
     private static BrokerTargetIdentity Target() => new(100, 42, @"C:\Games\MapleStory.exe", 123_456);
 
+    private static BrokerInputSession CreateSession(
+        IBrokerKeySender sender,
+        FakeClock? clock = null,
+        ManualMovementLeaseScheduler? deadlines = null,
+        IBrokerTargetSafetyGate? safety = null) =>
+        new(
+            sender,
+            clock ?? new FakeClock(),
+            safety ?? new AlwaysSafeTarget(),
+            deadlines ?? new ManualMovementLeaseScheduler(),
+            heartbeatTimeoutMs: 2_000);
+
     private static BrokerRequest Request(
         long sequence,
         BrokerCommandKind kind,
@@ -180,6 +242,42 @@ public sealed class BrokerInputSessionTests
     private sealed class FakeClock : IBrokerClock
     {
         public long NowMonoMs { get; set; }
+    }
+
+    private sealed class ManualMovementLeaseScheduler : IMovementLeaseScheduler
+    {
+        private readonly Dictionary<BrokerLogicalAction, Scheduled> current = [];
+
+        public void Schedule(
+            BrokerLogicalAction action,
+            long generation,
+            long deadlineMonoMs,
+            Action<BrokerLogicalAction, long> onExpired) =>
+            current[action] = new Scheduled(generation, deadlineMonoMs, onExpired);
+
+        public void Cancel(BrokerLogicalAction action, long generation)
+        {
+            if (current.TryGetValue(action, out Scheduled? scheduled) && scheduled.Generation == generation)
+                current.Remove(action);
+        }
+
+        public void CancelAll() => current.Clear();
+        public bool IsScheduled(BrokerLogicalAction action) => current.ContainsKey(action);
+        public long CurrentDeadline(BrokerLogicalAction action) => current[action].DeadlineMonoMs;
+
+        public void Trigger(BrokerLogicalAction action)
+        {
+            Scheduled scheduled = current[action];
+            current.Remove(action);
+            scheduled.OnExpired(action, scheduled.Generation);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private sealed record Scheduled(
+            long Generation,
+            long DeadlineMonoMs,
+            Action<BrokerLogicalAction, long> OnExpired);
     }
 
     private sealed class RecordingKeySender : IBrokerKeySender
