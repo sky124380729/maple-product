@@ -155,13 +155,16 @@ public sealed class StationarySessionController(
     private async Task DelayWithSafetyChecksAsync(int durationMs, CancellationToken cancellationToken)
     {
         const int safetyPollMs = 100;
-        int remaining = durationMs;
-        while (remaining > 0)
+        long deadline = checked(scheduler.NowMonoMs + durationMs);
+        while (true)
         {
-            int slice = Math.Min(safetyPollMs, remaining);
+            long remaining = deadline - scheduler.NowMonoMs;
+            if (remaining <= 0) return;
+
+            int slice = (int)Math.Min(safetyPollMs, remaining);
             await scheduler.DelayAsync(slice, cancellationToken);
-            remaining -= slice;
-            if (remaining == 0) continue;
+            if (scheduler.NowMonoMs >= deadline) return;
+
             SafetyCheckResult gate = await safety.CheckAsync(cancellationToken);
             if (!gate.Success) throw new SessionStopException(gate.Code);
         }

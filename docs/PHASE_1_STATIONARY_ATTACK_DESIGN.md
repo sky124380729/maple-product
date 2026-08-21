@@ -111,6 +111,7 @@ initialFacing（本次启动时用户确认的 Left/Right）
 - Broker 的 `keybd_event` 编码沿用 Windows integrated 实机路径：攻击键同时发送虚拟键和 Set-1 扫描码；左右方向键再设置 extended flag。`Ctrl` 必须编码为 `VK_CONTROL (0x11) + scan 0x1D`，不能使用零扫描码。
 - 移动和攻击不能重叠；每个动作必须有成对的 `KeyDown/KeyUp`。
 - Broker 断开、心跳超时、窗口身份变化或安全门失败时，由 Broker watchdog 和 Host 双重释放。单个动作租约到期只释放活动键，不得解除已经绑定的目标；Host 随后发送的幂等 `KeyUp` 必须成功，后续移动仍可继续。
+- 每个等待阶段（包括可选休息）都以单调绝对截止时间结束；分片安全检查耗时不能重复追加到阶段时长，实际结束最多受最后一次调度片段误差影响。
 
 ## 6. 攻击触发策略接口
 
