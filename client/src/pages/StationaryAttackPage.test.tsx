@@ -156,6 +156,17 @@ describe('StationaryAttackPage', () => {
     })
   })
 
+  it('starts map recording from the main window', async () => {
+    const user = userEvent.setup()
+    render(<StationaryAttackPage />)
+
+    await user.click(screen.getByRole('button', { name: /录制地图/ }))
+
+    expect(vi.mocked(window.chrome!.webview!.postMessage)).toHaveBeenCalledWith({
+      command: 'startMapRecording', recognitionEnabled: false,
+    })
+  })
+
   it('shows the previous abnormal termination reported at startup', () => {
     render(<StationaryAttackPage />)
 

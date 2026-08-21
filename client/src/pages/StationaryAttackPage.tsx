@@ -11,7 +11,7 @@ import {
   Typography,
   theme,
 } from 'antd'
-import { ArrowLeftOutlined, ArrowRightOutlined, EyeOutlined, PlayCircleOutlined, SaveOutlined, StopOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, ArrowRightOutlined, EyeOutlined, PlayCircleOutlined, SaveOutlined, StopOutlined, VideoCameraOutlined } from '@ant-design/icons'
 import { AttackModeField } from '../components/AttackModeField'
 import { AttackBandsEditor } from '../components/AttackBandsEditor'
 import { AdvancedParametersCollapse } from '../components/AdvancedParametersCollapse'
@@ -154,6 +154,10 @@ export function StationaryAttackPage() {
               <RecognitionToggle />
             </Form>
             <Space wrap>
+              <Button icon={<VideoCameraOutlined />} onClick={() => postBridgeCommand({
+                command: 'startMapRecording',
+                recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),
+              })}>录制地图</Button>
               <Button icon={<EyeOutlined />} onClick={() => postBridgeCommand({
                 command: 'openPreview',
                 recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),

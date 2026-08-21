@@ -115,6 +115,12 @@ public partial class MainWindow : Window
                         document.RootElement.TryGetProperty("recognitionEnabled", out JsonElement recognitionEnabled)
                         && recognitionEnabled.GetBoolean());
                     break;
+                case "startMapRecording":
+                    await OpenPreviewAsync(
+                        document.RootElement.TryGetProperty("recognitionEnabled", out JsonElement recordRecognition)
+                        && recordRecognition.GetBoolean(),
+                        startRecording: true);
+                    break;
             }
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException)
@@ -340,7 +346,7 @@ public partial class MainWindow : Window
         completedCancellation.Dispose();
     }
 
-    private async Task OpenPreviewAsync(bool recognitionEnabled)
+    private async Task OpenPreviewAsync(bool recognitionEnabled, bool startRecording = false)
     {
         if (windowLocator is null)
         {
@@ -363,7 +369,7 @@ public partial class MainWindow : Window
             previewHost = new Preview.PreviewWindowHost();
             previewHost.RecognitionSnapshotPublished += OnRecognitionSnapshot;
         }
-        await previewHost.ShowAsync(targetResolution.Target.Hwnd, lifetime.Token, recognitionEnabled);
+        await previewHost.ShowAsync(targetResolution.Target.Hwnd, lifetime.Token, recognitionEnabled, startRecording);
     }
 
     private void OnRecognitionSnapshot(RecognitionSnapshot snapshot) =>

@@ -36,13 +36,14 @@ public sealed class PreviewWindowHost : IAsyncDisposable
 
     public void Show() => _ = ShowAsync(0, CancellationToken.None);
 
-    public async Task ShowAsync(long hwnd, CancellationToken cancellationToken, bool recognitionEnabled = false)
+    public async Task ShowAsync(long hwnd, CancellationToken cancellationToken, bool recognitionEnabled = false, bool startRecording = false)
     {
         if (window is { IsVisible: true })
         {
             window.Activate();
             await session!.StartAsync(hwnd, cancellationToken);
             await SetRecognitionAsync(hwnd, recognitionEnabled, cancellationToken);
+            if (startRecording && recorder is null) await StartRecordingAsync();
             return;
         }
 
@@ -112,6 +113,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         window.Show();
         await session.StartAsync(hwnd, cancellationToken);
         await SetRecognitionAsync(hwnd, recognitionEnabled, cancellationToken);
+        if (startRecording) await StartRecordingAsync();
     }
 
     public async ValueTask DisposeAsync()
@@ -192,23 +194,30 @@ public sealed class PreviewWindowHost : IAsyncDisposable
 
     private async void OnRecordClicked(object? sender, RoutedEventArgs eventArgs)
     {
-        if (recorder is null)
-        {
-            string directory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "MapleProduct", "map-recordings");
-            recorder = new MapRecorder(new MapRecordingOptions("current-map", directory));
-            recorder.Start(Environment.TickCount64);
-            recordButton!.Content = "结束录制地图";
-            recordingStatus!.Text = "录制中：请手动走过平台和梯子";
-            return;
-        }
+        if (recorder is null) await StartRecordingAsync();
+        else await StopRecordingAsync("OPERATOR_STOPPED");
+    }
 
-        MapRecorder active = recorder;
+    private Task StartRecordingAsync()
+    {
+        string directory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "MapleProduct", "map-recordings");
+        recorder = new MapRecorder(new MapRecordingOptions("current-map", directory));
+        recorder.Start(Environment.TickCount64);
+        recordButton!.Content = "结束录制地图";
+        recordingStatus!.Text = "录制中：请手动走过平台和梯子";
+        return Task.CompletedTask;
+    }
+
+    private async Task StopRecordingAsync(string reason)
+    {
+        MapRecorder? active = recorder;
+        if (active is null) return;
         recorder = null;
         try
         {
-            MapRecordingResult result = await active.StopAsync("OPERATOR_STOPPED");
+            MapRecordingResult result = await active.StopAsync(reason);
             recordingStatus!.Text = $"录制完成：{result.SampleCount} 个样本，包已保存到 {result.PackagePath}";
             recordButton!.Content = "开始录制地图";
         }

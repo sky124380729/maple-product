@@ -6,6 +6,7 @@ type BridgeCommand =
   | { command: 'startStationary'; config: StationaryAttackConfig; initialFacing: 'left' | 'right' }
   | { command: 'stopStationary' }
   | { command: 'openPreview'; recognitionEnabled: boolean }
+  | { command: 'startMapRecording'; recognitionEnabled: boolean }
 
 declare global {
   interface Window {
