@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Maple.Host.Preview;
 using Maple.Host.Recognition;
+using Maple.Host.Navigation;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
@@ -67,6 +68,7 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
         var characters = new List<RecognitionTarget>();
         var monsters = new List<RecognitionTarget>();
         var drops = new List<RecognitionTarget>();
+        var environment = new List<RecognitionTarget>();
         // The checkpoint was trained on complete game screenshots. A single
         // full-frame pass avoids running eight overlapping inferences on every
         // preview frame; the sprite fallback handles small targets separately.
@@ -91,7 +93,7 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
             IReadOnlyList<YoloDetection> detections = YoloTensorDecoder.DecodeChannelsFirst(
                 output.ToArray(), manifest.Classes, candidates, 0.10,
                 manifest.NmsThreshold, manifest.InputWidth, manifest.InputHeight);
-            AddDetections(detections, tileInfo.X, tileInfo.Y, tile, characters, monsters, drops);
+            AddDetections(detections, tileInfo.X, tileInfo.Y, tile, characters, monsters, drops, environment);
         }
         SceneRecognitionResult sceneResult = (scene is not null && (monsters.Count == 0 || characters.Count == 0))
             ? scene.Analyze(frame)
@@ -120,16 +122,32 @@ public sealed class OnnxRecognitionProvider : IRecognitionProvider, IAsyncDispos
             .Select(item => item with { Kind = "player" })
             .Concat(sceneResult.OtherPlayers)
             .ToArray();
-        return baseResult with { Monsters = filteredMonsters, Drops = filteredDrops, OtherPlayers = otherPlayers, Self = self };
+        MapFrameGeometry geometry = EnvironmentGeometryClassifier.Classify(environment, frame.Width, frame.Height);
+        return baseResult with
+        {
+            Monsters = filteredMonsters,
+            Drops = filteredDrops,
+            OtherPlayers = otherPlayers,
+            Self = self,
+            Geometry = geometry
+        };
     }
 
     private void AddDetections(
         IReadOnlyList<YoloDetection> detections, int offsetX, int offsetY, CapturedFrame tile,
         List<RecognitionTarget> characters, List<RecognitionTarget> monsters,
-        List<RecognitionTarget> drops)
+        List<RecognitionTarget> drops, List<RecognitionTarget> environment)
     {
         foreach (YoloDetection detection in detections)
         {
+            if (string.Equals(detection.ClassName, "environment", StringComparison.OrdinalIgnoreCase)
+                && detection.Confidence >= 0.4)
+            {
+                environment.Add(new RecognitionTarget(
+                    offsetX + detection.X * tile.Width, offsetY + detection.Y * tile.Height,
+                    detection.Width * tile.Width, detection.Height * tile.Height,
+                    "environment", detection.Confidence));
+            }
             if (!manifest.ClassRoles.TryGetValue(detection.ClassName, out string? role)) continue;
             // The packaged model was trained on downscaled screenshots and
             // emits small-map mobs around 0.10-0.30 confidence. Keep the

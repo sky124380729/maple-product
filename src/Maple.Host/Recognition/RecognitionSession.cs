@@ -147,7 +147,12 @@ public sealed class RecognitionSession : IAsyncDisposable
                     var snapshot = RecognitionSnapshot.Create(
                         sessionId, currentTarget, frame.Sequence, frame.CapturedAtMonoMs,
                         Environment.TickCount64, analysis.Hud, analysis.Monsters,
-                        analysis.Drops, analysis.OtherPlayers, analysis.Self);
+                        analysis.Drops, analysis.OtherPlayers, analysis.Self,
+                        geometry: analysis.Geometry) with
+                    {
+                        FrameWidth = frame.Width,
+                        FrameHeight = frame.Height
+                    };
                     Latest = snapshot;
                     SnapshotPublished?.Invoke(snapshot);
                 }

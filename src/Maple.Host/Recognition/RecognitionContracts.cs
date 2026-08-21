@@ -1,4 +1,5 @@
 using Maple.Host.Windows;
+using Maple.Host.Navigation;
 
 namespace Maple.Host.Recognition;
 
@@ -21,6 +22,8 @@ public sealed record RecognitionSnapshot
     public string SessionId { get; init; } = string.Empty;
     public WindowIdentity? Target { get; init; }
     public long FrameSequence { get; init; }
+    public int FrameWidth { get; init; }
+    public int FrameHeight { get; init; }
     public long CapturedAtMonoMs { get; init; }
     public long PublishedAtMonoMs { get; init; }
     public long FrameAgeMs { get; init; }
@@ -31,13 +34,15 @@ public sealed record RecognitionSnapshot
     public IReadOnlyList<RecognitionTarget> Monsters { get; init; } = [];
     public IReadOnlyList<RecognitionTarget> Drops { get; init; } = [];
     public IReadOnlyList<RecognitionTarget> OtherPlayers { get; init; } = [];
+    public MapFrameGeometry? Geometry { get; init; }
 
     public static RecognitionSnapshot Create(
         string sessionId, WindowIdentity? target, long frameSequence,
         long capturedAtMonoMs, long publishedAtMonoMs, HudObservation hud,
         IEnumerable<RecognitionTarget> monsters, IEnumerable<RecognitionTarget> drops,
         IEnumerable<RecognitionTarget> otherPlayers, SelfObservation? self,
-        long staleAfterMs = 500)
+        long staleAfterMs = 500,
+        MapFrameGeometry? geometry = null)
     {
         long age = Math.Max(0, publishedAtMonoMs - capturedAtMonoMs);
         return new RecognitionSnapshot
@@ -47,7 +52,8 @@ public sealed record RecognitionSnapshot
             FrameAgeMs = age,
             Health = age > staleAfterMs ? RecognitionHealth.Stale : RecognitionHealth.Running,
             Hud = hud,
-            Monsters = monsters.ToArray(), Drops = drops.ToArray(), OtherPlayers = otherPlayers.ToArray(), Self = self
+            Monsters = monsters.ToArray(), Drops = drops.ToArray(), OtherPlayers = otherPlayers.ToArray(), Self = self,
+            Geometry = geometry
         };
     }
 

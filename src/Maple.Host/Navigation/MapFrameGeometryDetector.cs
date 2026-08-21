@@ -140,12 +140,13 @@ public static class MapFrameGeometryDetector
     private static bool IsGrass(byte b, byte g, byte r) =>
         g >= 100 && g > r * 1.35 && g > b * 1.05;
 
-    private static bool IsLadder(byte b, byte g, byte r) =>
-        r is >= 70 and <= 210
-        && g is >= 60 and <= 210
-        && b is >= 20 and <= 180
-        && Math.Abs(g - r) <= 50
-        && g >= b * 0.92;
+    private static bool IsLadder(byte b, byte g, byte r)
+    {
+        int maximum = Math.Max(b, Math.Max(g, r));
+        int minimum = Math.Min(b, Math.Min(g, r));
+        return maximum is >= 70 and <= 220
+            && maximum - minimum <= 28;
+    }
 
     private readonly record struct Run(int Start, int End, int StartY, int EndY)
     {

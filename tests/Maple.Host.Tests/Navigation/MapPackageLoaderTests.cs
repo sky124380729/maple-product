@@ -28,6 +28,34 @@ public sealed class MapPackageLoaderTests
         Assert.Equal("mob_templates/templates/slime.png", snapshot.MonsterTemplates[0].Path);
         Assert.Equal(3, snapshot.MonsterTemplates[0].SizeBytes);
         Assert.False(string.IsNullOrWhiteSpace(snapshot.MonsterTemplates[0].Sha256));
+        Assert.True(snapshot.PlanningReady);
+        Assert.Empty(snapshot.QualityReasons);
+    }
+
+    [Fact]
+    public async Task Preserves_recording_quality_metadata()
+    {
+        await using MemoryStream package = CreatePackage(
+            manifest: "{\"format\":\"madudu_map_package\",\"version\":1,\"planning_ready\":false,\"quality_reasons\":[\"CONNECTIVITY_MISSING\"]}",
+            map: "{\"platforms\":[]}");
+
+        MapPackageSnapshot snapshot = await MapPackageLoader.LoadAsync(package);
+
+        Assert.False(snapshot.PlanningReady);
+        Assert.Equal(["CONNECTIVITY_MISSING"], snapshot.QualityReasons);
+    }
+
+    [Fact]
+    public async Task Rejects_inconsistent_recording_quality_metadata()
+    {
+        await using MemoryStream package = CreatePackage(
+            manifest: "{\"format\":\"madudu_map_package\",\"version\":1,\"planning_ready\":true,\"quality_reasons\":[\"CONNECTIVITY_MISSING\"]}",
+            map: "{\"platforms\":[]}");
+
+        MapPackageLoadException exception = await Assert.ThrowsAsync<MapPackageLoadException>(
+            () => MapPackageLoader.LoadAsync(package));
+
+        Assert.Equal("MAP_PACKAGE_INVALID:QUALITY_INCONSISTENT", exception.Code);
     }
 
     [Theory]

@@ -30,6 +30,9 @@ public sealed class PreviewWindowHost : IAsyncDisposable
     private RecognitionSnapshot? latestRecognition;
     private int lastFrameWidth;
     private int lastFrameHeight;
+    private bool recognitionRequested;
+    private readonly SemaphoreSlim recordingGate = new(1, 1);
+    private int recordingStopPending;
 
     public event Action<PreviewFault>? Faulted;
     public event Action<RecognitionSnapshot>? RecognitionSnapshotPublished;
@@ -40,9 +43,10 @@ public sealed class PreviewWindowHost : IAsyncDisposable
     {
         if (window is { IsVisible: true })
         {
+            recognitionRequested = recognitionEnabled;
             window.Activate();
             await session!.StartAsync(hwnd, cancellationToken);
-            await SetRecognitionAsync(hwnd, recognitionEnabled, cancellationToken);
+            await SetRecognitionAsync(hwnd, recognitionEnabled || startRecording || recorder is not null, cancellationToken);
             if (startRecording && recorder is null) await StartRecordingAsync();
             return;
         }
@@ -103,6 +107,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         window.Closed += OnClosed;
         session = new PreviewSession(new WindowsGraphicsCaptureSource());
         recognition = new RecognitionSession(RecognitionProviderFactory.Create());
+        recognitionRequested = recognitionEnabled;
         recognitionToggle = new RecognitionLeaseToggle(token => recognition.AcquireAsync(
             RecognitionLeaseKind.Preview,
             new Maple.Host.Windows.WindowIdentity(hwnd, 0, string.Empty, 0),
@@ -112,7 +117,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         session.Faulted += OnFaulted;
         window.Show();
         await session.StartAsync(hwnd, cancellationToken);
-        await SetRecognitionAsync(hwnd, recognitionEnabled, cancellationToken);
+        await SetRecognitionAsync(hwnd, recognitionEnabled || startRecording, cancellationToken);
         if (startRecording) await StartRecordingAsync();
     }
 
@@ -150,10 +155,15 @@ public sealed class PreviewWindowHost : IAsyncDisposable
                 MapRecorder? activeRecorder = recorder;
                 if (activeRecorder is not null)
                 {
-                    MapRecordingStatus status = activeRecorder.PushFrame(frame);
+                    RecognitionSnapshot? recognizedFrame = latestRecognition;
+                    MapLocalObservation? local = CreateLocalObservation(recognizedFrame, frame);
+                    MapRecordingStatus status = activeRecorder.PushFrame(
+                        frame,
+                        MinimapGeometryDetector.Observe(frame),
+                        local);
                     recordingStatus!.Text = $"录制中：样本 {status.SampleCount}，平台 {status.PlatformCandidateCount}，梯子 {status.LadderCandidateCount}";
                     if (!status.IsRecording && status.StopReason is not null)
-                        recordButton!.Content = "结束录制地图";
+                        RequestRecordingStop(status.StopReason);
                 }
                 RenderRecognitionOverlay();
 
@@ -180,6 +190,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         window?.Dispatcher.BeginInvoke(() =>
         {
             if (diagnostics is not null) diagnostics.Text = fault.Code;
+            if (recorder is not null) RequestRecordingStop("CAPTURE_FAULT");
         });
         Faulted?.Invoke(fault);
     }
@@ -194,41 +205,88 @@ public sealed class PreviewWindowHost : IAsyncDisposable
 
     private async void OnRecordClicked(object? sender, RoutedEventArgs eventArgs)
     {
-        if (recorder is null) await StartRecordingAsync();
-        else await StopRecordingAsync("OPERATOR_STOPPED");
+        try
+        {
+            if (recordButton is not null) recordButton.IsEnabled = false;
+            if (recorder is null) await StartRecordingAsync();
+            else await StopRecordingAsync("OPERATOR_STOPPED");
+        }
+        catch (Exception exception)
+        {
+            if (recordingStatus is not null) recordingStatus.Text = "录制操作失败：" + exception.Message;
+        }
+        finally
+        {
+            if (recordButton is not null) recordButton.IsEnabled = true;
+        }
     }
 
-    private Task StartRecordingAsync()
+    private async Task StartRecordingAsync()
     {
-        string directory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "MapleProduct", "map-recordings");
-        recorder = new MapRecorder(new MapRecordingOptions("current-map", directory));
-        recorder.Start(Environment.TickCount64);
-        recordButton!.Content = "结束录制地图";
-        recordingStatus!.Text = "录制中：请手动走过平台和梯子";
-        return Task.CompletedTask;
+        await recordingGate.WaitAsync();
+        try
+        {
+            if (recorder is not null) return;
+            string directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MapleProduct", "map-recordings");
+            var created = new MapRecorder(new MapRecordingOptions("current-map", directory));
+            created.Start(Environment.TickCount64);
+            try
+            {
+                if (recognitionToggle is not null)
+                    await recognitionToggle.SetEnabledAsync(true, CancellationToken.None);
+                recorder = created;
+                Volatile.Write(ref recordingStopPending, 0);
+                if (recordButton is not null) recordButton.Content = "结束录制地图";
+                if (recordingStatus is not null) recordingStatus.Text = "录制中：请手动走过平台和梯子";
+            }
+            catch
+            {
+                await created.DisposeAsync();
+                throw;
+            }
+        }
+        finally
+        {
+            recordingGate.Release();
+        }
     }
 
     public async Task StopRecordingAsync(string reason = "OPERATOR_STOPPED")
     {
-        MapRecorder? active = recorder;
-        if (active is null) return;
-        recorder = null;
+        await recordingGate.WaitAsync();
         try
         {
-            MapRecordingResult result = await active.StopAsync(reason);
-            recordingStatus!.Text = $"录制完成：{result.SampleCount} 个样本，包已保存到 {result.PackagePath}";
-            recordButton!.Content = "开始录制地图";
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or MapPackageLoadException)
-        {
-            recordingStatus!.Text = "录制导出失败：" + exception.Message;
-            recordButton!.Content = "开始录制地图";
+            MapRecorder? active = recorder;
+            if (active is null) return;
+            recorder = null;
+            try
+            {
+                MapRecordingResult result = await active.StopAsync(reason);
+                string quality = result.PlanningReady
+                    ? "可用于规划"
+                    : "需要继续录制：" + string.Join(",", result.QualityReasons);
+                if (recordingStatus is not null)
+                    recordingStatus.Text = $"录制完成：{result.SampleCount} 个样本，{quality}，包已保存到 {result.PackagePath}";
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or MapPackageLoadException)
+            {
+                if (recordingStatus is not null)
+                    recordingStatus.Text = "录制导出失败：" + exception.Message;
+            }
+            finally
+            {
+                await active.DisposeAsync();
+                if (!recognitionRequested)
+                    await SetRecognitionAsync(0, false, CancellationToken.None);
+                if (recordButton is not null) recordButton.Content = "开始录制地图";
+            }
         }
         finally
         {
-            await active.DisposeAsync();
+            Volatile.Write(ref recordingStopPending, 0);
+            recordingGate.Release();
         }
     }
 
@@ -242,21 +300,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             activeSession.Faulted -= OnFaulted;
             await activeSession.DisposeAsync();
         }
-        if (recorder is not null)
-        {
-            MapRecorder activeRecorder = recorder;
-            recorder = null;
-            try
-            {
-                MapRecordingResult result = await activeRecorder.StopAsync("PREVIEW_CLOSED");
-                if (recordingStatus is not null)
-                    recordingStatus.Text = $"录制完成：{result.SampleCount} 个样本，包已保存到 {result.PackagePath}";
-            }
-            finally
-            {
-                await activeRecorder.DisposeAsync();
-            }
-        }
+        await StopRecordingSafelyAsync("PREVIEW_CLOSED");
         if (recognitionToggle is not null)
         {
             await recognitionToggle.DisposeAsync();
@@ -299,6 +343,46 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         latestRecognition = snapshot;
         RecognitionSnapshotPublished?.Invoke(snapshot);
         window?.Dispatcher.BeginInvoke(() => RenderRecognitionOverlay());
+    }
+
+    private void RequestRecordingStop(string reason)
+    {
+        if (Interlocked.CompareExchange(ref recordingStopPending, 1, 0) != 0) return;
+        _ = StopRecordingSafelyAsync(reason);
+    }
+
+    private async Task StopRecordingSafelyAsync(string reason)
+    {
+        try
+        {
+            await StopRecordingAsync(reason);
+        }
+        catch (Exception exception)
+        {
+            if (recordingStatus is not null) recordingStatus.Text = "录制停止失败：" + exception.Message;
+        }
+    }
+
+    private static MapLocalObservation? CreateLocalObservation(
+        RecognitionSnapshot? recognized,
+        CapturedFrame frame)
+    {
+        if (recognized is null
+            || recognized.Health != RecognitionHealth.Running
+            || recognized.Geometry is null
+            || recognized.FrameWidth <= 0
+            || recognized.FrameHeight <= 0
+            || recognized.CapturedAtMonoMs > frame.CapturedAtMonoMs
+            || frame.CapturedAtMonoMs - recognized.CapturedAtMonoMs > 1000)
+            return null;
+        MapLocalSelf? self = recognized.Self is null
+            ? null
+            : new MapLocalSelf(
+                recognized.Self.X / recognized.FrameWidth,
+                recognized.Self.Y / recognized.FrameHeight,
+                recognized.Self.Width / recognized.FrameWidth,
+                recognized.Self.Height / recognized.FrameHeight);
+        return new MapLocalObservation(recognized.Geometry, self, recognized.FrameSequence);
     }
 
     private void RenderRecognitionOverlay()

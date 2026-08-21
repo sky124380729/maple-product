@@ -59,3 +59,25 @@
 - [x] Run Core/Host/InputBroker tests, React tests/build, WindowsHost Release build, and `git diff --check`.
 - [x] Run a live capture smoke test against the current client without sending input; it exported 3 samples to a `.mapzip` with 1 stable platform and 4 ladder candidates.
 - [x] Commit phase-2 evidence with the preview controls.
+
+### Task 5: Model-backed geometry and recording quality
+
+**Files:**
+- Create: `src/Maple.Host/Navigation/EnvironmentGeometryClassifier.cs`
+- Create: `src/Maple.Host/Navigation/MinimapGeometryDetector.cs`
+- Modify: `src/Maple.Host/Recognition/IRecognitionProvider.cs`
+- Modify: `src/Maple.Host/Recognition/RecognitionContracts.cs`
+- Modify: `src/Maple.Host/Recognition/RecognitionSession.cs`
+- Modify: `src/Maple.Host/Navigation/MapRecorder.cs`
+- Modify: `src/Maple.WindowsHost/Preview/OnnxRecognitionProvider.cs`
+- Modify: `src/Maple.WindowsHost/Preview/PreviewWindowHost.cs`
+- Test: `tests/Maple.Host.Tests/Navigation/EnvironmentGeometryClassifierTests.cs`
+- Test: `tests/Maple.Host.Tests/Navigation/MapRecorderTests.cs`
+
+- [x] Write failing tests proving a fixed small-map ROI produces global platforms/ladders, horizontal `environment` boxes become local platforms, vertical boxes become local ladders, square/background boxes are rejected, and unlinked ladders are not exported.
+- [x] Implement the classifier and carry geometry through `RecognitionAnalysis`/`RecognitionSnapshot` without publishing it to React.
+- [x] Use stable small-map geometry and self trajectory in `MapRecorder`; recording automatically enables the existing recognition lease and never starts a second inference session.
+- [x] Split compact JSONL observations into loader-safe archive entries; cap raw bytes and entry count; preserve `planningReady` plus stable quality reasons through package reload.
+- [x] Require fresh recognition Self, nearby local ladder/platform evidence, and one continuous global trajectory for the same connector before a package is planning-ready.
+- [x] Serialize preview recording start/stop; auto-export on capture fault or recording limit; clean temporary output and release the recording-only recognition lease.
+- [x] Run focused tests, full Host tests, React tests/build, WindowsHost Release build, and real-frame candidate-count verification before publishing.

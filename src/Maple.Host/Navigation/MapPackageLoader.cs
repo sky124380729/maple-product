@@ -46,7 +46,9 @@ public sealed record MapPackageSnapshot(
     ImmutableArray<MapPlatformLink> PortalLinks,
     ImmutableArray<MapPlatformLink> TeleportLinks,
     ImmutableArray<MapStationPoint> StationPoints,
-    ImmutableArray<MapPackageTemplate> MonsterTemplates);
+    ImmutableArray<MapPackageTemplate> MonsterTemplates,
+    bool PlanningReady,
+    ImmutableArray<string> QualityReasons);
 
 public static class MapPackageLoader
 {
@@ -130,6 +132,9 @@ public static class MapPackageLoader
             .Select(ReadTemplate)
             .ToImmutableArray();
 
+        bool planningReady = ParsePlanningReady(manifest);
+        ImmutableArray<string> qualityReasons = ParseQualityReasons(manifest);
+        if (planningReady && !qualityReasons.IsEmpty) throw Invalid("QUALITY_INCONSISTENT");
         return new MapPackageSnapshot(
             name,
             ParseThresholds(manifest, map),
@@ -141,7 +146,31 @@ public static class MapPackageLoader
             portalLinks,
             teleportLinks,
             stationPoints,
-            templates);
+            templates,
+            planningReady,
+            qualityReasons);
+    }
+
+    private static bool ParsePlanningReady(JsonElement manifest)
+    {
+        if (!manifest.TryGetProperty("planning_ready", out JsonElement value)) return true;
+        if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            throw Invalid("PLANNING_READY_TYPE");
+        return value.GetBoolean();
+    }
+
+    private static ImmutableArray<string> ParseQualityReasons(JsonElement manifest)
+    {
+        if (!manifest.TryGetProperty("quality_reasons", out JsonElement value)) return [];
+        if (value.ValueKind != JsonValueKind.Array) throw Invalid("QUALITY_REASONS_TYPE");
+        ImmutableArray<string>.Builder reasons = ImmutableArray.CreateBuilder<string>();
+        foreach (JsonElement item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(item.GetString()))
+                throw Invalid("QUALITY_REASON_TYPE");
+            reasons.Add(item.GetString()!);
+        }
+        return reasons.ToImmutable();
     }
 
     private static MapPackageThresholds ParseThresholds(JsonElement manifest, JsonElement map)

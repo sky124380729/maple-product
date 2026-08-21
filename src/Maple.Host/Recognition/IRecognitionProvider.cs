@@ -1,4 +1,5 @@
 using Maple.Host.Preview;
+using Maple.Host.Navigation;
 
 namespace Maple.Host.Recognition;
 
@@ -7,7 +8,8 @@ public sealed record RecognitionAnalysis(
     IReadOnlyList<RecognitionTarget> Monsters,
     IReadOnlyList<RecognitionTarget> Drops,
     IReadOnlyList<RecognitionTarget> OtherPlayers,
-    SelfObservation? Self)
+    SelfObservation? Self,
+    MapFrameGeometry? Geometry = null)
 {
     public static RecognitionAnalysis Empty { get; } = new(HudObservation.Empty, [], [], [], null);
 }

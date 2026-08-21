@@ -47,6 +47,19 @@ public sealed class MapFrameGeometryDetectorTests
         Assert.Empty(geometry.Ladders);
     }
 
+    [Fact]
+    public void Ignores_brown_vertical_background_texture_as_a_ladder()
+    {
+        CapturedFrame frame = Frame(120, 100, (x, y) =>
+            x == 70 && y is >= 20 and <= 65 ? Pixel(100, 100, 140)
+            : y == 65 && x is >= 30 and <= 100 ? Pixel(80, 180, 20)
+            : Pixel(0, 0, 0));
+
+        MapFrameGeometry geometry = MapFrameGeometryDetector.Detect(frame);
+
+        Assert.Empty(geometry.Ladders);
+    }
+
     private static CapturedFrame Frame(int width, int height, Func<int, int, byte[]> pixel)
     {
         byte[] pixels = new byte[width * height * 4];
