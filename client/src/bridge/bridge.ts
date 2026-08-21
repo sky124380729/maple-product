@@ -7,6 +7,7 @@ type BridgeCommand =
   | { command: 'stopStationary' }
   | { command: 'openPreview'; recognitionEnabled: boolean }
   | { command: 'startMapRecording'; recognitionEnabled: boolean }
+  | { command: 'stopMapRecording' }
 
 declare global {
   interface Window {

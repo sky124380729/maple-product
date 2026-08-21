@@ -160,10 +160,21 @@ describe('StationaryAttackPage', () => {
     const user = userEvent.setup()
     render(<StationaryAttackPage />)
 
-    await user.click(screen.getByRole('button', { name: /录制地图/ }))
+    await user.click(screen.getByRole('button', { name: 'video-camera 录制地图' }))
 
     expect(vi.mocked(window.chrome!.webview!.postMessage)).toHaveBeenCalledWith({
       command: 'startMapRecording', recognitionEnabled: false,
+    })
+  })
+
+  it('stops map recording from the main window', async () => {
+    const user = userEvent.setup()
+    render(<StationaryAttackPage />)
+
+    await user.click(screen.getByRole('button', { name: /停止录制地图/ }))
+
+    expect(vi.mocked(window.chrome!.webview!.postMessage)).toHaveBeenCalledWith({
+      command: 'stopMapRecording',
     })
   })
 

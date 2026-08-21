@@ -121,6 +121,10 @@ public partial class MainWindow : Window
                         && recordRecognition.GetBoolean(),
                         startRecording: true);
                     break;
+                case "stopMapRecording":
+                    if (previewHost is not null)
+                        await previewHost.StopRecordingAsync("OPERATOR_STOPPED");
+                    break;
             }
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException)

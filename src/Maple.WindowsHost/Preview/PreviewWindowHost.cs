@@ -210,7 +210,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    private async Task StopRecordingAsync(string reason)
+    public async Task StopRecordingAsync(string reason = "OPERATOR_STOPPED")
     {
         MapRecorder? active = recorder;
         if (active is null) return;

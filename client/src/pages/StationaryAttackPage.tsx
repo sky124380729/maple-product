@@ -158,6 +158,7 @@ export function StationaryAttackPage() {
                 command: 'startMapRecording',
                 recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),
               })}>录制地图</Button>
+              <Button danger icon={<StopOutlined />} onClick={() => postBridgeCommand({ command: 'stopMapRecording' })}>停止录制地图</Button>
               <Button icon={<EyeOutlined />} onClick={() => postBridgeCommand({
                 command: 'openPreview',
                 recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),
