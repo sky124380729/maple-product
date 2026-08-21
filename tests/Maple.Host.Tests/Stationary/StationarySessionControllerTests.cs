@@ -65,7 +65,7 @@ public sealed class StationarySessionControllerTests
     }
 
     [Fact]
-    public async Task Operator_cancellation_does_not_turn_a_late_key_up_into_an_error_stop()
+    public async Task Operator_cancellation_preserves_a_late_key_up_failure()
     {
         using var cancellation = new CancellationTokenSource();
         var actions = new RecordingActionSink(
@@ -82,7 +82,7 @@ public sealed class StationarySessionControllerTests
         await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, cancellation.Token);
 
         Assert.Equal(["Down:Attack", "Up:Attack", "ReleaseAll"], actions.Events);
-        Assert.Equal("CANCELLED", publisher.States[^1].EarlyReleaseReason);
+        Assert.Equal("KEY_LEASE_DEADLINE_MISSED", publisher.States[^1].EarlyReleaseReason);
     }
 
     [Fact]

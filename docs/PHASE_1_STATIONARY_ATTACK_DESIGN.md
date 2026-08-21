@@ -52,7 +52,7 @@ Idle
  -> Stopped
 ```
 
-任意运行状态都可以进入 `Stopped`。进入 `Stopped` 必须先取消当前延迟/任务，再按活动键逐一释放，最后调用 Broker `ReleaseAll`，然后发布最终状态。用户主动取消时，即使取消竞态中的幂等 `KeyUp` 返回 `KEY_LEASE_DEADLINE_MISSED`，也必须保留 `CANCELLED`/用户停止原因并静默结束；非取消运行路径仍将该码视为安全停止错误。
+任意运行状态都可以进入 `Stopped`。进入 `Stopped` 必须先取消当前延迟/任务，再按活动键逐一释放，最后调用 Broker `ReleaseAll`，然后发布最终状态。
 
 ## 3. 第二方向不能被跳过
 
@@ -75,8 +75,6 @@ Idle
 ```text
 sessionAnchor（逻辑起点，不要求识别绝对像素坐标）
 relativeOffsetMs（程序自己造成的累计相对位移）
-leftTravelMs（本会话所有左向按压累计值）
-rightTravelMs（本会话所有右向按压累计值）
 maxLateralMoveMs（每侧最大阈值，默认 80）
 initialFacing（本次启动时用户确认的 Left/Right）
 ```
@@ -87,12 +85,12 @@ initialFacing（本次启动时用户确认的 Left/Right）
 
 每次移动抽样流程：
 
-1. 根据 `leftTravelMs` 和 `rightTravelMs` 分别计算左、右剩余预算；净偏移不能恢复已经消耗的方向预算。
+1. 根据 `relativeOffsetMs` 计算左、右剩余预算。
 2. 第一方向固定为 `initialFacing` 的反方向；该方向预算不足时当前会话安全停止，不能交换顺序，否则会改变最终朝向。
 3. 在第一方向的剩余预算和配置的 `[minHoldMs,maxHoldMs]` 交集内按 1ms 粒度抽样。
 4. 完成第一段后抽样间隔并等待。
 5. 第二段固定为 `initialFacing`，与第一方向相反；根据更新后的 offset 重新计算该方向预算，再独立抽样。
-6. 更新左右累计值和 `relativeOffsetMs`，但不把净 offset 修正为 0，也不重置方向累计值。
+6. 更新 offset，但不把它修正为 0。
 7. 完成稳定等待后进入下一阶段。
 
 示例不是固定脚本：
@@ -102,7 +100,7 @@ initialFacing（本次启动时用户确认的 Left/Right）
 初始朝左：右 104ms -> 左 91ms  => offset -23ms，最终朝左
 ```
 
-只要左右独立累计值不超过用户配置的每侧阈值，保留非零净位移就是正确行为。
+只要全过程不超过 `[-maxLateralMoveMs,+maxLateralMoveMs]`，保留非零净位移就是正确行为。
 
 ## 5. 可靠按键与租约
 
