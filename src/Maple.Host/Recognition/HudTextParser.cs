@@ -154,8 +154,14 @@ public static partial class HudTextParser
             .Replace('I', '1').Replace('l', '1').Replace('|', '1');
         value = value.Replace("引", "91").Replace("丨", "1");
         if (value.TrimStart().StartsWith("MP", StringComparison.OrdinalIgnoreCase))
+        {
+            // The narrow MP crop occasionally recognizes the final `5` in
+            // values such as `65/65` as the Chinese glyph `司`. Keep this
+            // recovery scoped to MP so unrelated HUD text is untouched.
+            value = value.Replace("司", "5", StringComparison.Ordinal);
             value = value.Replace("3 91", "991", StringComparison.Ordinal)
                 .Replace("3 9l", "991", StringComparison.Ordinal);
+        }
         value = Regex.Replace(value, @"(?<=\d)\s+(?=[\d])", string.Empty);
         return value;
     }

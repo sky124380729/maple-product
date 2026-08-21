@@ -52,6 +52,15 @@ public sealed class HudTextParserTests
     }
 
     [Fact]
+    public void Repairs_mp_maximum_when_ocr_reads_the_final_five_as_chinese_text()
+    {
+        HudResource resource = HudTextParser.ParseResource("MP 〔 65 / 6 司");
+
+        Assert.Equal(65, resource.Current);
+        Assert.Equal(65, resource.Maximum);
+    }
+
+    [Fact]
     public void Rejects_identity_text_when_level_marker_is_buried_in_chat_text()
     {
         HudIdentity identity = HudTextParser.ParseIdentity("逍遥大柜 出金 100R=300万金币 猎人 LV. 0");
