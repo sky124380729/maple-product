@@ -51,10 +51,9 @@ public sealed class StationaryMovementPlannerTests
     }
 
     [Fact]
-    public void Balanced_movement_can_continue_after_total_travel_exceeds_the_boundary()
+    public void Limits_each_direction_cumulative_travel_instead_of_only_net_offset()
     {
         var planner = new StationaryMovementPlanner(new SequenceRandomSource(
-            125, 30, 125, 80,
             125, 30, 125, 80,
             125, 30, 125, 80));
         planner.StartSession(MovementDirection.Right);
@@ -64,11 +63,13 @@ public sealed class StationaryMovementPlannerTests
         planner.ApplyCompletedPlan(first);
         MovementPlan second = planner.CreatePlan(config);
         planner.ApplyCompletedPlan(second);
-        MovementPlan third = planner.CreatePlan(config);
-        planner.ApplyCompletedPlan(third);
 
+        Assert.Equal(250, planner.LeftTravelMs);
+        Assert.Equal(250, planner.RightTravelMs);
         Assert.Equal(0, planner.RelativeOffsetMs);
-        Assert.Equal(0, third.ProjectedOffsetMs);
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+            () => planner.CreatePlan(config));
+        Assert.Equal("INITIAL_FACING_BUDGET_EXHAUSTED", exception.Message);
     }
 
     [Fact]

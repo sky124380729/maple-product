@@ -74,7 +74,9 @@ Idle
 
 ```text
 sessionAnchor（逻辑起点，不要求识别绝对像素坐标）
-relativeOffsetMs（程序自己造成的当前净相对位移）
+relativeOffsetMs（程序自己造成的累计相对位移）
+leftTravelMs（本会话所有左向按压累计值）
+rightTravelMs（本会话所有右向按压累计值）
 maxLateralMoveMs（每侧最大阈值，默认 80）
 initialFacing（本次启动时用户确认的 Left/Right）
 ```
@@ -85,12 +87,12 @@ initialFacing（本次启动时用户确认的 Left/Right）
 
 每次移动抽样流程：
 
-1. 根据 `relativeOffsetMs` 计算左、右剩余预算；相反方向移动会抵消已有净偏移。
+1. 根据 `leftTravelMs` 和 `rightTravelMs` 分别计算左、右剩余预算；净偏移不能恢复已经消耗的方向预算。
 2. 第一方向固定为 `initialFacing` 的反方向；该方向预算不足时当前会话安全停止，不能交换顺序，否则会改变最终朝向。
 3. 在第一方向的剩余预算和配置的 `[minHoldMs,maxHoldMs]` 交集内按 1ms 粒度抽样。
 4. 完成第一段后抽样间隔并等待。
 5. 第二段固定为 `initialFacing`，与第一方向相反；根据更新后的 offset 重新计算该方向预算，再独立抽样。
-6. 更新 `relativeOffsetMs`，但不强制把净 offset 修正为 0。
+6. 更新左右累计值和 `relativeOffsetMs`，但不把净 offset 修正为 0，也不重置方向累计值。
 7. 完成稳定等待后进入下一阶段。
 
 示例不是固定脚本：
@@ -100,18 +102,17 @@ initialFacing（本次启动时用户确认的 Left/Right）
 初始朝左：右 104ms -> 左 91ms  => offset -23ms，最终朝左
 ```
 
-只要全过程净偏移不超过 `[-maxLateralMoveMs,+maxLateralMoveMs]`，保留非零净位移就是正确行为。
+只要左右独立累计值不超过用户配置的每侧阈值，保留非零净位移就是正确行为。
 
 ## 5. 可靠按键与租约
 
 - 攻击持续时间最多 `60,000ms`，UI、配置、Host、协议和 Broker 验证器必须使用同一个硬上限。
 - 长按期间使用单一逻辑按键租约，不通过重复物理 `keybd_event` 制造点击；如需心跳/租约刷新，必须验证不会产生重复按下或提前释放。
-- `MoveLeft/MoveRight` 的 `leaseMs` 是物理方向键按压上限。Broker 为方向键注册独立单调截止任务并自动释放；攻击键继续由 Host 正常收尾，不进入短移动截止调度。
-- Host 在计划保持时间结束后发送 `KeyUp`；`KEY_UP_SENT` 和自动释放后的幂等 `KEY_ALREADY_UP` 都是正常结果，不得把确认延迟升级为会话错误。
+- `leaseMs` 作为 Host 计划保持时长传给 Broker；Broker 对方向键注册独立的一次性单调截止，到期只释放对应活动键；攻击键不进入该短租约调度。watchdog 继续负责断联、心跳和安全门兜底释放。
+- Host 在计划保持时间结束后发送 `KeyUp`；`KEY_UP_SENT` 和自动释放后的幂等 `KEY_ALREADY_UP` 都是正常收尾结果。方向键截止必须有独立自动释放测试，且不能改变攻击键的单一 Down/Up 节奏。
 - Broker 的 `keybd_event` 编码沿用 Windows integrated 实机路径：攻击键同时发送虚拟键和 Set-1 扫描码；左右方向键再设置 extended flag。`Ctrl` 必须编码为 `VK_CONTROL (0x11) + scan 0x1D`，不能使用零扫描码。
 - 移动和攻击不能重叠；每个动作必须有成对的 `KeyDown/KeyUp`。
 - Broker 断开、心跳超时、窗口身份变化或安全门失败时，由 Broker watchdog 和 Host 双重释放。单个动作租约到期只释放活动键，不得解除已经绑定的目标；Host 随后发送的幂等 `KeyUp` 必须成功，后续移动仍可继续。
-- 每个等待阶段（包括可选休息）都以单调绝对截止时间结束；分片安全检查耗时不能重复追加到阶段时长，实际结束最多受最后一次调度片段误差影响。
 
 ## 6. 攻击触发策略接口
 

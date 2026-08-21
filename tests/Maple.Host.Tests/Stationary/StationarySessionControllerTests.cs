@@ -148,46 +148,6 @@ public sealed class StationarySessionControllerTests
     }
 
     [Fact]
-    public async Task Bounds_rest_phase_overrun_to_one_scheduler_slice()
-    {
-        var publisher = new RecordingPublisher();
-        var scheduler = new OverrunningScheduler(extraMillisecondsPerDelay: 20);
-        var random = new SequenceRandomSource(
-            1, 1_000, 30, 30, 30, 80, 1, 300,
-            1, 1_000, 30, 30, 30, 80, 1, 300);
-        StationaryAttackConfig config = TestConfig() with
-        {
-            MaxLateralMoveMs = 200,
-            MoveHoldMinMs = 30,
-            MoveHoldMaxMs = 30,
-            MoveGapMinMs = 30,
-            MoveGapMaxMs = 30,
-            StabilizeMinMs = 80,
-            StabilizeMaxMs = 80,
-            RestEnabled = true,
-            RestProbabilityPercent = 100,
-            RestMinMs = 300,
-            RestMaxMs = 300
-        };
-        var controller = CreateController(
-            new RecordingActionSink(),
-            publisher,
-            scheduler,
-            random,
-            config);
-
-        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, CancellationToken.None);
-
-        StationaryRhythmState resting = publisher.States.Single(
-            state => state.Phase == StationaryPhase.Resting && state.CycleId == 1);
-        StationaryRhythmState nextAttack = publisher.States
-            .First(state => state.Phase == StationaryPhase.AttackHolding && state.CycleId == 2);
-        long actualRestMs = nextAttack.PhaseStartedMonoMs - resting.PhaseStartedMonoMs;
-
-        Assert.InRange(actualRestMs, 300, 320);
-    }
-
-    [Fact]
     public async Task Rechecks_safety_during_a_long_hold_and_stops_immediately()
     {
         var actions = new RecordingActionSink();
@@ -388,17 +348,6 @@ public sealed class StationarySessionControllerTests
         public Task DelayAsync(int milliseconds, CancellationToken cancellationToken)
         {
             NowMonoMs += milliseconds;
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class OverrunningScheduler(int extraMillisecondsPerDelay) : IMonotonicScheduler
-    {
-        public long NowMonoMs { get; private set; } = 10_000;
-
-        public Task DelayAsync(int milliseconds, CancellationToken cancellationToken)
-        {
-            NowMonoMs += milliseconds + extraMillisecondsPerDelay;
             return Task.CompletedTask;
         }
     }

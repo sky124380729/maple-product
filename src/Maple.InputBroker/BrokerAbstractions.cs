@@ -12,17 +12,6 @@ public sealed class EnvironmentBrokerClock : IBrokerClock
     public long NowMonoMs => Environment.TickCount64;
 }
 
-public interface IMovementLeaseScheduler : IAsyncDisposable
-{
-    void Schedule(
-        BrokerLogicalAction action,
-        long generation,
-        long deadlineMonoMs,
-        Action<BrokerLogicalAction, long> onExpired);
-    void Cancel(BrokerLogicalAction action, long generation);
-    void CancelAll();
-}
-
 public interface IBrokerKeySender
 {
     bool Send(string key, bool isKeyUp);
