@@ -47,7 +47,7 @@
 - [x] Forward captured frames to `MapRecorder` without changing recognition or input flows.
 - [x] On preview close, stop recording and finalize the current package without starting Broker or sending keys.
 - [x] Run WindowsHost Release build with 0 warnings and 0 errors.
-- [ ] Commit preview controls together with phase-2 evidence.
+- [x] Commit `9bec5e0 feat: add preview map recording controls` together with phase-2 evidence.
 
 ### Task 4: End-to-end verification
 
@@ -55,7 +55,7 @@
 - Modify: `docs/PHASE_2_AUTO_NAVIGATION_SCOPE.md`
 - Create: `docs/phase-2/evidence/map-recording.md`
 
-- [ ] Document that recording is observation-only and automatic navigation remains disabled.
-- [ ] Run Core/Host/InputBroker tests, React tests/build, WindowsHost Release build, and `git diff --check`.
-- [ ] Run a live capture smoke test against the current client without sending input and record the generated package path.
-- [ ] Commit `docs: record map recording acceptance evidence`.
+- [x] Document that recording is observation-only and automatic navigation remains disabled.
+- [x] Run Core/Host/InputBroker tests, React tests/build, WindowsHost Release build, and `git diff --check`.
+- [x] Run a live capture smoke test against the current client without sending input; it exported 3 samples to a `.mapzip` with 1 stable platform and 4 ladder candidates.
+- [x] Commit phase-2 evidence with the preview controls.
