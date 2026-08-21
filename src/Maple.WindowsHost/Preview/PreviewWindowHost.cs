@@ -1,10 +1,13 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Maple.Host.Navigation;
 using Maple.Host.Preview;
 using Maple.Host.Recognition;
 using WpfImage = System.Windows.Controls.Image;
+using WpfButton = System.Windows.Controls.Button;
 
 namespace Maple.WindowsHost.Preview;
 
@@ -13,6 +16,8 @@ public sealed class PreviewWindowHost : IAsyncDisposable
     private Window? window;
     private WpfImage? image;
     private TextBlock? diagnostics;
+    private TextBlock? recordingStatus;
+    private WpfButton? recordButton;
     private Canvas? overlay;
     private PreviewSession? session;
     private RecognitionSession? recognition;
@@ -48,20 +53,40 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             Foreground = System.Windows.Media.Brushes.White,
             Margin = new Thickness(12, 7, 12, 7)
         };
+        recordingStatus = new TextBlock
+        {
+            Text = "地图录制未开始",
+            Foreground = System.Windows.Media.Brushes.LightGray,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 12, 0)
+        };
+        recordButton = new WpfButton
+        {
+            Content = "开始录制地图",
+            Padding = new Thickness(12, 5, 12, 5),
+            Margin = new Thickness(12, 5, 0, 5)
+        };
+        recordButton.Click += OnRecordClicked;
         overlay = new Canvas { IsHitTestVisible = false };
         var grid = new Grid();
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition());
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var toolbar = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+        toolbar.Children.Add(recordButton);
+        toolbar.Children.Add(recordingStatus);
+        grid.Children.Add(toolbar);
         var imageLayer = new Grid();
         imageLayer.Children.Add(image);
         imageLayer.Children.Add(overlay);
+        Grid.SetRow(imageLayer, 1);
         grid.Children.Add(imageLayer);
         var diagnosticsBar = new Border
         {
             Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(224, 20, 25, 24)),
             Child = diagnostics
         };
-        Grid.SetRow(diagnosticsBar, 1);
+        Grid.SetRow(diagnosticsBar, 2);
         grid.Children.Add(diagnosticsBar);
 
         window = new Window
@@ -120,6 +145,14 @@ public sealed class PreviewWindowHost : IAsyncDisposable
                 lastFrameWidth = frame.Width;
                 lastFrameHeight = frame.Height;
                 recognition?.PushFrame(frame);
+                MapRecorder? activeRecorder = recorder;
+                if (activeRecorder is not null)
+                {
+                    MapRecordingStatus status = activeRecorder.PushFrame(frame);
+                    recordingStatus!.Text = $"录制中：样本 {status.SampleCount}，平台 {status.PlatformCandidateCount}，梯子 {status.LadderCandidateCount}";
+                    if (!status.IsRecording && status.StopReason is not null)
+                        recordButton!.Content = "结束录制地图";
+                }
                 RenderRecognitionOverlay();
 
                 if (firstFrameAtMonoMs == 0) firstFrameAtMonoMs = frame.CapturedAtMonoMs;
@@ -155,6 +188,41 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         await DisposeSessionAsync();
     }
 
+    private MapRecorder? recorder;
+
+    private async void OnRecordClicked(object? sender, RoutedEventArgs eventArgs)
+    {
+        if (recorder is null)
+        {
+            string directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MapleProduct", "map-recordings");
+            recorder = new MapRecorder(new MapRecordingOptions("current-map", directory));
+            recorder.Start(Environment.TickCount64);
+            recordButton!.Content = "结束录制地图";
+            recordingStatus!.Text = "录制中：请手动走过平台和梯子";
+            return;
+        }
+
+        MapRecorder active = recorder;
+        recorder = null;
+        try
+        {
+            MapRecordingResult result = await active.StopAsync("OPERATOR_STOPPED");
+            recordingStatus!.Text = $"录制完成：{result.SampleCount} 个样本，包已保存到 {result.PackagePath}";
+            recordButton!.Content = "开始录制地图";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or MapPackageLoadException)
+        {
+            recordingStatus!.Text = "录制导出失败：" + exception.Message;
+            recordButton!.Content = "开始录制地图";
+        }
+        finally
+        {
+            await active.DisposeAsync();
+        }
+    }
+
     private async Task DisposeSessionAsync()
     {
         PreviewSession? activeSession = session;
@@ -164,6 +232,21 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             activeSession.FrameArrived -= OnFrameArrived;
             activeSession.Faulted -= OnFaulted;
             await activeSession.DisposeAsync();
+        }
+        if (recorder is not null)
+        {
+            MapRecorder activeRecorder = recorder;
+            recorder = null;
+            try
+            {
+                MapRecordingResult result = await activeRecorder.StopAsync("PREVIEW_CLOSED");
+                if (recordingStatus is not null)
+                    recordingStatus.Text = $"录制完成：{result.SampleCount} 个样本，包已保存到 {result.PackagePath}";
+            }
+            finally
+            {
+                await activeRecorder.DisposeAsync();
+            }
         }
         if (recognitionToggle is not null)
         {
@@ -179,6 +262,8 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         image = null;
         overlay = null;
         diagnostics = null;
+        recordingStatus = null;
+        recordButton = null;
         firstFrameAtMonoMs = 0;
         lastSequence = 0;
         displayedFrames = 0;
