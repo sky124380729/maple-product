@@ -89,42 +89,42 @@
 - Modify: `docs/phase-2/evidence/map-recording.md`
 - Test: `tests/Maple.Host.Tests/Navigation/MapRecorderTests.cs`
 
-- [ ] **Step 1: Write failing platform-merge tests**
+- [x] **Step 1: Write failing platform-merge tests**
 
 Add recorder tests that submit three stable observations containing several same-level overlapping platform candidates, then assert the exported `map.json` contains one union platform rather than duplicate nodes. Add a nearby but vertically distinct platform and assert it remains separate.
 
-- [ ] **Step 2: Verify the platform tests fail**
+- [x] **Step 2: Verify the platform tests fail**
 
 Run `dotnet test tests/Maple.Host.Tests/Maple.Host.Tests.csproj --no-restore --filter "FullyQualifiedName~MapRecorderTests"`. Expected: the overlap test reports more exported platforms than expected.
 
-- [ ] **Step 3: Merge stable platforms before assigning IDs**
+- [x] **Step 3: Merge stable platforms before assigning IDs**
 
 In `MapRecorder.BuildPlatforms`, first promote stable tracks, then repeatedly union candidates when `abs(y1-y2) <= 0.025` and their ranges overlap or have a gap no larger than `0.02`. Use the weighted average Y and union X range, then sort and assign IDs.
 
-- [ ] **Step 4: Verify platform tests pass**
+- [x] **Step 4: Verify platform tests pass**
 
 Run the focused `MapRecorderTests`; expect zero failures.
 
-- [ ] **Step 5: Write failing connector-verification tests**
+- [x] **Step 5: Write failing connector-verification tests**
 
 Add tests proving that visual-only, edge (`x <= 0.03` or `x >= 0.97`), near-full-height (`span >= 0.65`) and one-platform ladders stay in observation JSONL but do not enter `map.json`. Add a mixed case with one truly climbed connector and one stable unvisited visual connector; assert only the climbed connector is exported and result contains `UNVERIFIED_CONNECTORS` with `PlanningReady=false`.
 
-- [ ] **Step 6: Verify connector tests fail**
+- [x] **Step 6: Verify connector tests fail**
 
 Run the focused `MapRecorderTests`; expected failures are extra exported ladders and missing `UNVERIFIED_CONNECTORS`.
 
-- [ ] **Step 7: Build navigation ladders only from corroborated trajectories**
+- [x] **Step 7: Build navigation ladders only from corroborated trajectories**
 
 Filter stable visual ladder tracks for edge/full-height noise, merge overlapping tracks at the same X, and use them only as candidates. Match each continuous, locally corroborated vertical Self trajectory to a candidate at `abs(candidate.x - trajectory.x) <= 0.04`; export only the matched connector when it links at least two merged platforms. Count remaining non-noise candidates as unverified and add `UNVERIFIED_CONNECTORS` to quality reasons.
 
-- [ ] **Step 8: Verify focused navigation tests pass**
+- [x] **Step 8: Verify focused navigation tests pass**
 
 Run `MapRecorderTests`, `MinimapGeometryDetectorTests`, and `MapPackageLoaderTests`; expect zero failures.
 
-- [ ] **Step 9: Replay the 20:19 real recording package**
+- [x] **Step 9: Replay the 20:19 real recording package**
 
 Read `current-map-20260821-121957-5548bc3f6d5243b09e3b90a4f7d80927.mapzip`, feed its compact JSONL observations into the strict topology builder through production contracts, and record platform count, verified connector count, rejected noise count, and quality reasons. Expected: overlapping platform count is reduced, edge/full-height ladders are absent, and the package is not planning-ready while unverified connectors remain.
 
-- [ ] **Step 10: Run full verification and publish**
+- [x] **Step 10: Run full verification and publish**
 
 Run `dotnet test MapleProduct.sln --no-restore`, `npm test -- --run`, `npm run build`, WindowsHost Release build/publish, startup smoke, and `git diff --check`. Update `docs/phase-2/evidence/map-recording.md`, commit only strict-topology files, and push `master`.

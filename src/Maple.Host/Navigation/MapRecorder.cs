@@ -62,7 +62,7 @@ public sealed class MapRecorder : IAsyncDisposable
     private int observationChunkCount;
     private bool finalizationAttempted;
     private Exception? finalizationError;
-    private int corroboratedTrajectoryConnectorCount;
+    private int unverifiedConnectorCount;
     private readonly HashSet<long> localEvidenceSequences = [];
 
     public MapRecorder(MapRecordingOptions options)
@@ -296,46 +296,108 @@ public sealed class MapRecorder : IAsyncDisposable
         }
     }
 
-    private ImmutableArray<MapPlatform> BuildPlatforms() =>
-        platformTracks.Where(track => track.Count >= 3 && (track.XMax - track.XMin) / track.Count >= 0.06)
-            .Select((track, index) => new MapPlatform(
-                index,
+    private ImmutableArray<MapPlatform> BuildPlatforms()
+    {
+        List<PlatformCluster> clusters = platformTracks
+            .Where(track => track.Count >= 3 && (track.XMax - track.XMin) / track.Count >= 0.06)
+            .Select(track => new PlatformCluster(
                 track.XMin / track.Count,
                 track.XMax / track.Count,
-                track.Y / track.Count))
+                track.Y / track.Count,
+                track.Count))
+            .ToList();
+        bool merged;
+        do
+        {
+            merged = false;
+            for (int first = 0; first < clusters.Count && !merged; first++)
+            for (int second = first + 1; second < clusters.Count; second++)
+            {
+                PlatformCluster left = clusters[first];
+                PlatformCluster right = clusters[second];
+                double gap = Math.Max(0, Math.Max(left.XMin, right.XMin) - Math.Min(left.XMax, right.XMax));
+                if (Math.Abs(left.Y - right.Y) > 0.025 || gap > 0.020_001) continue;
+                clusters[first] = left.Merge(right);
+                clusters.RemoveAt(second);
+                merged = true;
+                break;
+            }
+        } while (merged);
+
+        return clusters.Select((cluster, index) => new MapPlatform(
+                index, cluster.XMin, cluster.XMax, cluster.Y))
             .OrderBy(platform => platform.Y)
             .ThenBy(platform => platform.XMin)
             .Select((platform, index) => platform with { Id = index })
             .ToImmutableArray();
+    }
 
     private ImmutableArray<MapLadder> BuildLadders(ImmutableArray<MapPlatform> platforms)
     {
-        corroboratedTrajectoryConnectorCount = 0;
-        List<MapLadder> ladders = ladderTracks.Where(track => track.Count >= 3)
+        unverifiedConnectorCount = 0;
+        List<MapLadder> candidates = MergeLadderCandidates(ladderTracks.Where(track => track.Count >= 3)
             .Select(track => CreateLadder(
                 track.X / track.Count,
                 track.YMin / track.Count,
                 track.YMax / track.Count,
                 platforms))
-            .Where(ladder => !ladder.PlatformIds.IsEmpty)
-            .ToList();
+            .Where(IsNavigableCandidate));
+        List<MapLadder> verified = [];
+        HashSet<int> matchedCandidates = [];
 
         foreach ((double x, double yMin, double yMax) in BuildTrajectoryConnectors())
         {
-            MapLadder? existing = ladders.FirstOrDefault(ladder => Math.Abs(ladder.X - x) <= 0.04
-                && Math.Min(ladder.YMax, yMax) >= Math.Max(ladder.YMin, yMin));
-            if (existing is not null)
-            {
-                if (existing.PlatformIds.Length >= 2) corroboratedTrajectoryConnectorCount++;
-                continue;
-            }
-            MapLadder inferred = CreateLadder(x, yMin, yMax, platforms);
-            if (!inferred.PlatformIds.IsEmpty) ladders.Add(inferred);
-            if (inferred.PlatformIds.Length >= 2) corroboratedTrajectoryConnectorCount++;
+            int match = Enumerable.Range(0, candidates.Count)
+                .Where(index => !matchedCandidates.Contains(index))
+                .Where(index => Math.Abs(candidates[index].X - x) <= 0.04
+                    && Math.Min(candidates[index].YMax, yMax) + 0.04 >= Math.Max(candidates[index].YMin, yMin))
+                .OrderBy(index => Math.Abs(candidates[index].X - x))
+                .FirstOrDefault(-1);
+            if (match < 0) continue;
+            matchedCandidates.Add(match);
+            verified.Add(candidates[match]);
         }
 
-        return ladders.Select((ladder, index) => ladder with { Id = index }).ToImmutableArray();
+        unverifiedConnectorCount = candidates.Count - matchedCandidates.Count;
+        return verified.Select((ladder, index) => ladder with { Id = index }).ToImmutableArray();
     }
+
+    private static List<MapLadder> MergeLadderCandidates(IEnumerable<MapLadder> source)
+    {
+        List<MapLadder> candidates = source.ToList();
+        bool merged;
+        do
+        {
+            merged = false;
+            for (int first = 0; first < candidates.Count && !merged; first++)
+            for (int second = first + 1; second < candidates.Count; second++)
+            {
+                MapLadder left = candidates[first];
+                MapLadder right = candidates[second];
+                if (Math.Abs(left.X - right.X) > 0.03
+                    || Math.Min(left.YMax, right.YMax) + 0.04 < Math.Max(left.YMin, right.YMin))
+                    continue;
+                double x = (left.X + right.X) / 2;
+                double yMin = Math.Min(left.YMin, right.YMin);
+                double yMax = Math.Max(left.YMax, right.YMax);
+                ImmutableArray<int> platformIds = left.PlatformIds
+                    .Concat(right.PlatformIds)
+                    .Distinct()
+                    .Order()
+                    .ToImmutableArray();
+                candidates[first] = new MapLadder(0, x, yMin, yMax, platformIds);
+                candidates.RemoveAt(second);
+                merged = true;
+                break;
+            }
+        } while (merged);
+        return candidates;
+    }
+
+    private static bool IsNavigableCandidate(MapLadder ladder) =>
+        ladder.X is > 0.03 and < 0.97
+        && ladder.YMax - ladder.YMin is >= 0.08 and < 0.65
+        && ladder.PlatformIds.Length >= 2;
 
     private IEnumerable<(double X, double YMin, double YMax)> BuildTrajectoryConnectors()
     {
@@ -429,16 +491,44 @@ public sealed class MapRecorder : IAsyncDisposable
         if (platforms.Length < 2) reasons.Add("PLATFORM_COVERAGE_LOW");
         if (platforms.Length > 64) reasons.Add("PLATFORM_NOISE_HIGH");
         if (ladders.Length > 32) reasons.Add("LADDER_NOISE_HIGH");
-        bool multipleLevels = platforms.Length >= 2
-            && platforms.Max(platform => platform.Y) - platforms.Min(platform => platform.Y) >= 0.15;
-        if (multipleLevels && (corroboratedTrajectoryConnectorCount == 0
-            || !ladders.Any(ladder => ladder.PlatformIds.Length >= 2)))
+        if (unverifiedConnectorCount > 0) reasons.Add("UNVERIFIED_CONNECTORS");
+        if (!HasConnectedPlatformGraph(platforms, ladders))
             reasons.Add("CONNECTIVITY_MISSING");
         if (observations.Count(observation => observation.Self is not null) < 3)
             reasons.Add("SELF_TRAJECTORY_LOW");
         if (platforms.Length >= 2 && observations.Count(HasNearbyLocalPlatform) < 3)
             reasons.Add("LOCAL_PLATFORM_EVIDENCE_LOW");
         return reasons.ToImmutable();
+    }
+
+    private static bool HasConnectedPlatformGraph(
+        ImmutableArray<MapPlatform> platforms,
+        ImmutableArray<MapLadder> ladders)
+    {
+        if (platforms.Length <= 1) return true;
+        Dictionary<int, HashSet<int>> neighbors = platforms.ToDictionary(
+            platform => platform.Id,
+            _ => new HashSet<int>());
+        foreach (MapLadder ladder in ladders)
+        {
+            foreach (int first in ladder.PlatformIds)
+            foreach (int second in ladder.PlatformIds)
+            {
+                if (first != second && neighbors.ContainsKey(first) && neighbors.ContainsKey(second))
+                    neighbors[first].Add(second);
+            }
+        }
+
+        HashSet<int> reached = [platforms[0].Id];
+        Queue<int> pending = new([platforms[0].Id]);
+        while (pending.TryDequeue(out int current))
+        {
+            foreach (int neighbor in neighbors[current])
+            {
+                if (reached.Add(neighbor)) pending.Enqueue(neighbor);
+            }
+        }
+        return reached.Count == platforms.Length;
     }
 
     private static bool HasNearbyLocalPlatform(MapRecordingObservation observation)
@@ -533,6 +623,19 @@ public sealed class MapRecorder : IAsyncDisposable
             XMax += nextXMax;
             Y += nextY;
             Count++;
+        }
+    }
+
+    private sealed record PlatformCluster(double XMin, double XMax, double Y, int Weight)
+    {
+        public PlatformCluster Merge(PlatformCluster other)
+        {
+            int combinedWeight = Weight + other.Weight;
+            return new PlatformCluster(
+                Math.Min(XMin, other.XMin),
+                Math.Max(XMax, other.XMax),
+                (Y * Weight + other.Y * other.Weight) / combinedWeight,
+                combinedWeight);
         }
     }
 

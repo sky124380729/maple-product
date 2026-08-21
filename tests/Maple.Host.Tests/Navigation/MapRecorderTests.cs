@@ -22,13 +22,13 @@ public sealed class MapRecorderTests
 
         Assert.Equal(3, result.SampleCount);
         Assert.Equal(1, result.PlatformCount);
-        Assert.Equal(1, result.LadderCount);
+        Assert.Equal(0, result.LadderCount);
         Assert.True(File.Exists(result.PackagePath));
         await using FileStream stream = File.OpenRead(result.PackagePath);
         MapPackageSnapshot snapshot = await MapPackageLoader.LoadAsync(stream);
         Assert.Equal("Recorded Map", snapshot.Name);
         Assert.Single(snapshot.Platforms);
-        Assert.Single(snapshot.Ladders);
+        Assert.Empty(snapshot.Ladders);
         using ZipArchive archive = ZipFile.OpenRead(result.PackagePath);
         Assert.Contains(archive.Entries, entry =>
             entry.FullName.StartsWith("recording/observations-", StringComparison.Ordinal));
@@ -70,6 +70,35 @@ public sealed class MapRecorderTests
         second.PushFrame(Frame(1400, 3), minimap);
         MapRecordingResult stable = await second.StopAsync();
         Assert.Equal(1, stable.PlatformCount);
+    }
+
+    [Fact]
+    public async Task Merges_overlapping_same_level_platform_tracks_before_export()
+    {
+        string directory = CreateTempDirectory();
+        await using MapRecorder recorder = new(new MapRecordingOptions("Merged", directory));
+        recorder.Start(1000);
+        MapFrameGeometry geometry = new(
+        [
+            new MapPlatformCandidate(0.10, 0.45, 0.50, 0.9),
+            new MapPlatformCandidate(0.30, 0.70, 0.51, 0.9),
+            new MapPlatformCandidate(0.72, 0.90, 0.50, 0.9),
+            new MapPlatformCandidate(0.10, 0.45, 0.58, 0.9)
+        ], []);
+        for (int index = 0; index < 3; index++)
+            recorder.PushFrame(
+                Frame(1000 + index * 200, index + 1),
+                new MinimapObservation(geometry, null));
+
+        MapRecordingResult result = await recorder.StopAsync();
+
+        Assert.Equal(2, result.PlatformCount);
+        await using FileStream stream = File.OpenRead(result.PackagePath);
+        MapPackageSnapshot snapshot = await MapPackageLoader.LoadAsync(stream);
+        MapPlatform merged = Assert.Single(snapshot.Platforms, platform => platform.Y < 0.55);
+        Assert.Equal(0.10, merged.XMin, 3);
+        Assert.Equal(0.90, merged.XMax, 3);
+        Assert.Single(snapshot.Platforms, platform => platform.Y >= 0.55);
     }
 
     [Fact]
@@ -116,7 +145,7 @@ public sealed class MapRecorderTests
         [
             new MapPlatformCandidate(0.1, 0.9, 0.3, 0.9),
             new MapPlatformCandidate(0.1, 0.9, 0.7, 0.9)
-        ], []);
+        ], [new MapLadderCandidate(0.5, 0.25, 0.75, 0.9)]);
         recorder.PushFrame(Frame(1000, 1), new MinimapObservation(geometry, new MinimapPoint(0.5, 0.3, 0.9)), LocalLadderAtSelf());
         recorder.PushFrame(Frame(1200, 2), new MinimapObservation(geometry, new MinimapPoint(0.51, 0.5, 0.9)), LocalLadderAtSelf());
         recorder.PushFrame(Frame(1400, 3), new MinimapObservation(geometry, new MinimapPoint(0.5, 0.7, 0.9)), LocalLadderAtSelf());
@@ -125,6 +154,86 @@ public sealed class MapRecorderTests
 
         Assert.Equal(1, result.LadderCount);
         Assert.True(result.PlanningReady);
+    }
+
+    [Fact]
+    public async Task Exports_only_climbed_connectors_and_blocks_planning_when_visual_connectors_remain()
+    {
+        string directory = CreateTempDirectory();
+        await using MapRecorder recorder = new(new MapRecordingOptions("Partial", directory));
+        recorder.Start(1000);
+        MapFrameGeometry geometry = new(
+        [
+            new MapPlatformCandidate(0.1, 0.9, 0.3, 0.9),
+            new MapPlatformCandidate(0.1, 0.9, 0.7, 0.9)
+        ],
+        [
+            new MapLadderCandidate(0.3, 0.25, 0.75, 0.9),
+            new MapLadderCandidate(0.7, 0.25, 0.75, 0.9)
+        ]);
+        MapLocalObservation local = LocalLadderAtSelf();
+        recorder.PushFrame(Frame(1000, 1), new MinimapObservation(geometry, new MinimapPoint(0.3, 0.3, 0.9)), local);
+        recorder.PushFrame(Frame(1200, 2), new MinimapObservation(geometry, new MinimapPoint(0.3, 0.5, 0.9)), local);
+        recorder.PushFrame(Frame(1400, 3), new MinimapObservation(geometry, new MinimapPoint(0.3, 0.7, 0.9)), local);
+
+        MapRecordingResult result = await recorder.StopAsync();
+
+        Assert.Equal(1, result.LadderCount);
+        Assert.False(result.PlanningReady);
+        Assert.Contains("UNVERIFIED_CONNECTORS", result.QualityReasons);
+        await using FileStream stream = File.OpenRead(result.PackagePath);
+        MapPackageSnapshot snapshot = await MapPackageLoader.LoadAsync(stream);
+        MapLadder ladder = Assert.Single(snapshot.Ladders);
+        Assert.Equal(0.3, ladder.X, 2);
+        Assert.Equal(2, ladder.PlatformIds.Length);
+    }
+
+    [Fact]
+    public async Task Blocks_planning_when_verified_connectors_do_not_reach_every_platform()
+    {
+        string directory = CreateTempDirectory();
+        await using MapRecorder recorder = new(new MapRecordingOptions("Disconnected", directory));
+        recorder.Start(1000);
+        MapFrameGeometry geometry = new(
+        [
+            new MapPlatformCandidate(0.1, 0.9, 0.2, 0.9),
+            new MapPlatformCandidate(0.1, 0.9, 0.5, 0.9),
+            new MapPlatformCandidate(0.1, 0.9, 0.8, 0.9)
+        ], [new MapLadderCandidate(0.5, 0.15, 0.55, 0.9)]);
+        recorder.PushFrame(Frame(1000, 1), new MinimapObservation(geometry, new MinimapPoint(0.5, 0.2, 0.9)), LocalLadderAtSelf());
+        recorder.PushFrame(Frame(1200, 2), new MinimapObservation(geometry, new MinimapPoint(0.5, 0.35, 0.9)), LocalLadderAtSelf());
+        recorder.PushFrame(Frame(1400, 3), new MinimapObservation(geometry, new MinimapPoint(0.5, 0.5, 0.9)), LocalLadderAtSelf());
+
+        MapRecordingResult result = await recorder.StopAsync();
+
+        Assert.Equal(3, result.PlatformCount);
+        Assert.Equal(1, result.LadderCount);
+        Assert.False(result.PlanningReady);
+        Assert.Contains("CONNECTIVITY_MISSING", result.QualityReasons);
+    }
+
+    [Fact]
+    public async Task Keeps_edge_and_full_height_ladders_out_of_the_navigation_map()
+    {
+        string directory = CreateTempDirectory();
+        await using MapRecorder recorder = new(new MapRecordingOptions("Noise", directory));
+        recorder.Start(1000);
+        MapFrameGeometry geometry = new(
+            TwoLevelGeometry().Platforms,
+        [
+            new MapLadderCandidate(0.02, 0.25, 0.75, 0.9),
+            new MapLadderCandidate(0.98, 0.25, 0.75, 0.9),
+            new MapLadderCandidate(0.5, 0.0, 1.0, 0.9)
+        ]);
+        for (int index = 0; index < 3; index++)
+            recorder.PushFrame(
+                Frame(1000 + index * 200, index + 1),
+                new MinimapObservation(geometry, null));
+
+        MapRecordingResult result = await recorder.StopAsync();
+
+        Assert.Equal(0, result.LadderCount);
+        Assert.DoesNotContain("UNVERIFIED_CONNECTORS", result.QualityReasons);
     }
 
     [Fact]
