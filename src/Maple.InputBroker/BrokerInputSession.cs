@@ -12,11 +12,9 @@ public sealed class BrokerInputSession(
     private const int MaximumMoveLeaseMs = 5_000;
     private readonly object sync = new();
     private readonly Dictionary<BrokerLogicalAction, ActiveKey> active = [];
-    private readonly Dictionary<BrokerLogicalAction, MovementLease> movementLeases = [];
     private bool armed;
     private bool disposed;
     private long lastHeartbeatMonoMs = clock.NowMonoMs;
-    private long nextMovementLeaseGeneration;
     private long lastSequence;
     private BrokerTargetIdentity? armedTarget;
 
@@ -130,20 +128,17 @@ public sealed class BrokerInputSession(
         {
             if (!string.Equals(current.Key, key, StringComparison.OrdinalIgnoreCase))
             {
-                CancelMovementLease(action);
                 if (!sender.Send(current.Key, isKeyUp: true))
                     return RejectAndRelease(request, "KEY_UP_FAILED");
                 active.Remove(action);
                 if (!sender.Send(key, isKeyUp: false)) return RejectAndRelease(request, "KEY_DOWN_FAILED");
             }
             active[action] = new ActiveKey(key, deadline);
-            ScheduleMovementLease(action, key, request.LeaseMs);
             return Accept(request, "KEY_LEASE_REFRESHED");
         }
 
         if (!sender.Send(key, isKeyUp: false)) return RejectAndRelease(request, "KEY_DOWN_FAILED");
         active[action] = new ActiveKey(key, deadline);
-        ScheduleMovementLease(action, key, request.LeaseMs);
         return Accept(request, "KEY_DOWN_SENT");
     }
 
@@ -153,7 +148,6 @@ public sealed class BrokerInputSession(
             return RejectAndRelease(request, "ACTION_REQUIRED");
         if (!active.TryGetValue(action, out ActiveKey? current))
             return Accept(request, "KEY_ALREADY_UP");
-        CancelMovementLease(action);
         bool success = sender.Send(current.Key, isKeyUp: true);
         if (success) active.Remove(action);
         return success ? Accept(request, "KEY_UP_SENT") : RejectAndRelease(request, "KEY_UP_FAILED");
@@ -186,7 +180,6 @@ public sealed class BrokerInputSession(
             _ => null
         };
         if (opposite is not { } value || !active.TryGetValue(value, out ActiveKey? key)) return true;
-        CancelMovementLease(value);
         if (!sender.Send(key.Key, isKeyUp: true)) return false;
         active.Remove(value);
         return true;
@@ -205,7 +198,6 @@ public sealed class BrokerInputSession(
 
     private bool ReleaseAll()
     {
-        CancelAllMovementLeases();
         bool success = true;
         foreach ((BrokerLogicalAction action, ActiveKey key) in active.ToArray())
         {
@@ -213,47 +205,6 @@ public sealed class BrokerInputSession(
             else success = false;
         }
         return success;
-    }
-
-    private void ScheduleMovementLease(BrokerLogicalAction action, string key, int leaseMs)
-    {
-        if (action is not (BrokerLogicalAction.MoveLeft or BrokerLogicalAction.MoveRight)) return;
-        CancelMovementLease(action);
-        long generation = ++nextMovementLeaseGeneration;
-        Timer timer = new(
-            _ => OnMovementLeaseExpired(action, key, generation),
-            state: null,
-            dueTime: Math.Max(1, leaseMs),
-            period: Timeout.Infinite);
-        movementLeases[action] = new MovementLease(key, generation, timer);
-    }
-
-    private void CancelMovementLease(BrokerLogicalAction action)
-    {
-        if (!movementLeases.Remove(action, out MovementLease? lease)) return;
-        lease.Timer.Dispose();
-    }
-
-    private void CancelAllMovementLeases()
-    {
-        foreach (MovementLease lease in movementLeases.Values)
-            lease.Timer.Dispose();
-        movementLeases.Clear();
-    }
-
-    private void OnMovementLeaseExpired(BrokerLogicalAction action, string key, long generation)
-    {
-        lock (sync)
-        {
-            if (disposed || !movementLeases.TryGetValue(action, out MovementLease? lease) ||
-                lease.Generation != generation || !active.TryGetValue(action, out ActiveKey? current) ||
-                !string.Equals(current.Key, key, StringComparison.OrdinalIgnoreCase))
-                return;
-
-            movementLeases.Remove(action);
-            lease.Timer.Dispose();
-            if (sender.Send(current.Key, isKeyUp: true)) active.Remove(action);
-        }
     }
 
     private BrokerResponse RejectAndRelease(BrokerRequest request, string code)
@@ -277,5 +228,4 @@ public sealed class BrokerInputSession(
         new(BrokerProtocol.Version, request.Sequence, false, code);
 
     private sealed record ActiveKey(string Key, long LeaseDeadlineMonoMs);
-    private sealed record MovementLease(string Key, long Generation, Timer Timer);
 }

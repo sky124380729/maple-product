@@ -108,8 +108,8 @@ initialFacing（本次启动时用户确认的 Left/Right）
 
 - 攻击持续时间最多 `60,000ms`，UI、配置、Host、协议和 Broker 验证器必须使用同一个硬上限。
 - 长按期间使用单一逻辑按键租约，不通过重复物理 `keybd_event` 制造点击；如需心跳/租约刷新，必须验证不会产生重复按下或提前释放。
-- `leaseMs` 作为 Host 计划保持时长传给 Broker；Broker 对方向键注册独立的一次性单调截止，到期只释放对应活动键；攻击键不进入该短租约调度。watchdog 继续负责断联、心跳和安全门兜底释放。
-- Host 在计划保持时间结束后发送 `KeyUp`；`KEY_UP_SENT` 和自动释放后的幂等 `KEY_ALREADY_UP` 都是正常收尾结果。方向键截止必须有独立自动释放测试，且不能改变攻击键的单一 Down/Up 节奏。
+- `leaseMs` 作为 Host 计划保持时长传给 Broker；Broker 记录活动键，并由 watchdog 负责断联、心跳和安全门兜底释放。物理按压硬截止暂不作为一期已实现能力，避免短租约在高负载下把正常收尾误判为会话错误。
+- Host 在计划保持时间结束后发送 `KeyUp`；`KEY_UP_SENT` 和幂等 `KEY_ALREADY_UP` 都是正常收尾结果。
 - Broker 的 `keybd_event` 编码沿用 Windows integrated 实机路径：攻击键同时发送虚拟键和 Set-1 扫描码；左右方向键再设置 extended flag。`Ctrl` 必须编码为 `VK_CONTROL (0x11) + scan 0x1D`，不能使用零扫描码。
 - 移动和攻击不能重叠；每个动作必须有成对的 `KeyDown/KeyUp`。
 - Broker 断开、心跳超时、窗口身份变化或安全门失败时，由 Broker watchdog 和 Host 双重释放。单个动作租约到期只释放活动键，不得解除已经绑定的目标；Host 随后发送的幂等 `KeyUp` 必须成功，后续移动仍可继续。

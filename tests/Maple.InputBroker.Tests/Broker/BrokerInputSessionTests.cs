@@ -108,34 +108,6 @@ public sealed class BrokerInputSessionTests
     }
 
     [Fact]
-    public async Task Movement_lease_releases_without_waiting_for_the_watchdog()
-    {
-        var sender = new RecordingKeySender();
-        var session = new BrokerInputSession(sender, new FakeClock(), new AlwaysSafeTarget(), 2_000);
-        session.Arm(Target(), "secret");
-
-        await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.MoveLeft, "Left", 25));
-        await Task.Delay(100);
-
-        Assert.Equal(["Down:Left", "Up:Left"], sender.Events);
-        Assert.Empty(session.ActiveKeys);
-    }
-
-    [Fact]
-    public async Task Movement_lease_scheduler_does_not_release_attack_key()
-    {
-        var sender = new RecordingKeySender();
-        var session = new BrokerInputSession(sender, new FakeClock(), new AlwaysSafeTarget(), 2_000);
-        session.Arm(Target(), "secret");
-
-        await session.HandleAsync(Request(1, BrokerCommandKind.KeyDown, BrokerLogicalAction.Attack, "Ctrl", 25));
-        await Task.Delay(100);
-
-        Assert.Equal(["Down:Ctrl"], sender.Events);
-        Assert.Single(session.ActiveKeys);
-    }
-
-    [Fact]
     public async Task Rejects_and_releases_when_target_identity_is_no_longer_valid()
     {
         var sender = new RecordingKeySender();
