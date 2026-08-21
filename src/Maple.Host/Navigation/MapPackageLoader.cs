@@ -35,8 +35,12 @@ public sealed record MapStationPoint(int Id, double X, double Y, int? PlatformId
 
 public sealed record MapPackageTemplate(string Path, long SizeBytes, string Sha256);
 
+public sealed record MapMinimapRect(int X, int Y, int Width, int Height);
+
 public sealed record MapPackageSnapshot(
     string Name,
+    MapMinimapRect? MinimapRect,
+    string? MinimapRectSource,
     MapPackageThresholds Thresholds,
     ImmutableArray<MapPlatform> Platforms,
     ImmutableArray<MapLadder> Ladders,
@@ -137,6 +141,8 @@ public static class MapPackageLoader
         if (planningReady && !qualityReasons.IsEmpty) throw Invalid("QUALITY_INCONSISTENT");
         return new MapPackageSnapshot(
             name,
+            ParseMinimapRect(manifest, map),
+            StringValue(manifest, "minimap_rect_source") ?? StringValue(map, "minimap_rect_source"),
             ParseThresholds(manifest, map),
             platforms,
             ladders,
@@ -149,6 +155,21 @@ public static class MapPackageLoader
             templates,
             planningReady,
             qualityReasons);
+    }
+
+    private static MapMinimapRect? ParseMinimapRect(JsonElement manifest, JsonElement map)
+    {
+        JsonElement value;
+        if (!manifest.TryGetProperty("minimap_rect", out value)
+            && !map.TryGetProperty("minimap_rect", out value))
+            return null;
+        if (value.ValueKind != JsonValueKind.Array) throw Invalid("MINIMAP_RECT");
+        int[] values = value.EnumerateArray()
+            .Select(item => Integer(item) ?? throw Invalid("MINIMAP_RECT"))
+            .ToArray();
+        if (values.Length != 4 || values[0] < 0 || values[1] < 0 || values[2] <= 0 || values[3] <= 0)
+            throw Invalid("MINIMAP_RECT");
+        return new MapMinimapRect(values[0], values[1], values[2], values[3]);
     }
 
     private static bool ParsePlanningReady(JsonElement manifest)

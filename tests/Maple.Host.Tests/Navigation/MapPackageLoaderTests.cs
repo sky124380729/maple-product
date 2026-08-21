@@ -7,6 +7,35 @@ namespace Maple.Host.Tests.Navigation;
 public sealed class MapPackageLoaderTests
 {
     [Fact]
+    public async Task Loads_navigation_minimap_metadata()
+    {
+        await using MemoryStream package = CreatePackage(
+            manifest: "{\"format\":\"madudu_map_package\",\"version\":1,\"map_name\":\"Swamp\",\"minimap_rect\":[5,103,223,72],\"minimap_rect_source\":\"manual\"}",
+            map: "{\"platforms\":[]}");
+
+        MapPackageSnapshot snapshot = await MapPackageLoader.LoadAsync(package);
+
+        Assert.Equal(new MapMinimapRect(5, 103, 223, 72), snapshot.MinimapRect);
+        Assert.Equal("manual", snapshot.MinimapRectSource);
+    }
+
+    [Theory]
+    [InlineData("[-1,0,10,10]")]
+    [InlineData("[0,0,0,10]")]
+    [InlineData("[0,0,10,-1]")]
+    public async Task Rejects_invalid_navigation_minimap_metadata(string rect)
+    {
+        await using MemoryStream package = CreatePackage(
+            manifest: $"{{\"format\":\"madudu_map_package\",\"version\":1,\"minimap_rect\":{rect}}}",
+            map: "{\"platforms\":[]}");
+
+        MapPackageLoadException exception = await Assert.ThrowsAsync<MapPackageLoadException>(
+            () => MapPackageLoader.LoadAsync(package));
+
+        Assert.Equal("MAP_PACKAGE_INVALID:MINIMAP_RECT", exception.Code);
+    }
+
+    [Fact]
     public async Task Loads_map_graph_thresholds_and_template_metadata()
     {
         await using MemoryStream package = CreatePackage(
