@@ -52,6 +52,8 @@ releaseSafetyMarginMs  固定 20ms
 6. `ReturnTowardCenter` 轮次结束后的绝对偏移严格小于 `abs(cycleStartOffsetMs)`。
 7. 两段时长分别从当前合法集合随机抽样，不复制、不固定差值、不强制归零。
 
+配置校验必须保证 `moveHoldMaxMs <= 5,000ms` 且 `maxLateralMoveMs >= moveHoldMinMs + 20ms`。不满足时分别返回 `MOVE_HOLD_LIMIT` 和 `MOVE_BUDGET_TOO_SMALL`，不得等到会话运行后才失败。
+
 ## 4. 分区随机策略
 
 以轮次开始时 `abs(relativeOffsetMs) / maxLateralMoveMs` 选择意图：
@@ -81,7 +83,7 @@ Planner 根据真实 offset 和轮次意图抽样第一段
 -> 发布带最终 relativeOffsetMs 的 Stabilizing 状态
 ```
 
-Broker 计时起点为成功物理 Down 返回后，终点为成功物理 Up 返回后。`actualHoldMs` 必须位于 `1–5,000ms`，与 Broker 方向动作硬上限一致；`releaseLatenessMs` 必须非负。计时缺失或非法使用 `MOVEMENT_TIMING_INVALID` 停止；提交后越界使用 `MOVEMENT_OFFSET_EXCEEDED` 停止。无合法第一方向使用 `INITIAL_FACING_BUDGET_EXHAUSTED`，无合法第二方向使用 `MOVEMENT_BUDGET_EXHAUSTED`。所有停止路径最终执行 `ReleaseAll`。
+Broker 计时起点为成功物理 Down 返回后，终点为成功物理 Up 返回后。`actualHoldMs` 必须位于 `1–5,000ms`，与 Broker 方向动作硬上限一致；`releaseLatenessMs` 必须非负。计时缺失或非法使用 `MOVEMENT_TIMING_INVALID` 停止；提交后越界使用 `MOVEMENT_OFFSET_EXCEEDED` 停止；第二段真实结果未完成已选择的回中意图时使用 `MOVEMENT_RETURN_UNSATISFIED` 停止。无合法第一方向使用 `INITIAL_FACING_BUDGET_EXHAUSTED`，无合法第二方向使用 `MOVEMENT_BUDGET_EXHAUSTED`。所有停止路径最终执行 `ReleaseAll`。
 
 释放迟到超过 `20ms` 不单独覆盖真实 offset 判断：控制器先按完整真实时长记账，仍在边界内则允许继续并记录诊断，越界则停止。这样不会通过截断测量值掩盖已经发生的输入。
 

@@ -99,7 +99,7 @@ initialFacing（本次启动时用户确认的 Left/Right）
 4. 校验真实时长后立即按方向符号提交第一段真实 offset。缺失、不在 `1–5,000ms` 内或越过配置边界时，以稳定错误码停止并 `ReleaseAll`。
 5. 基于更新后的真实 offset 抽样并等待两段间隔。
 6. 第二方向固定为 `initialFacing`。根据新的真实 offset、`20ms` 余量、本轮意图和下一轮第一方向预算重新计算合法范围，再按 1ms 粒度抽样；无合法值时安全停止。
-7. Host 主动完成第二方向 `KeyDown -> 等待 -> KeyUp`，校验并提交 Broker 返回的真实时长。轮次末 offset 不修正为零，并且必须满足本轮意图和下一轮预算不变量。
+7. Host 主动完成第二方向 `KeyDown -> 等待 -> KeyUp`，校验并提交 Broker 返回的真实时长。轮次末 offset 不修正为零，并且必须满足本轮意图和下一轮预算不变量；真实结果未完成回中意图时以 `MOVEMENT_RETURN_UNSATISFIED` 安全停止。
 8. 完成稳定等待后进入下一阶段。
 
 示例不是固定脚本：
@@ -162,7 +162,7 @@ IAttackTriggerStrategy.ShouldAttack(ObservationContext context)
 }
 ```
 
-校验要求：权重总和 100；所有范围为正且 min 不大于 max；攻击最大值不超过 60,000ms；移动抽样不能越过会话阈值；disabled 的 `monsterInRange` 不能启动。
+校验要求：权重总和 100；所有范围为正且 min 不大于 max；攻击最大值不超过 60,000ms；方向键计划保持最大值不超过 `5,000ms`；`maxLateralMoveMs >= moveHoldMinMs + 20ms`；移动抽样不能越过会话阈值；disabled 的 `monsterInRange` 不能启动。
 
 配置不包含用户可编辑的目标 exe 路径。旧版配置中的 `targetExecutablePath` 只作为向后兼容字段读取和保存，Host 不使用它发现窗口，React 不显示或校验该字段。实际进程路径仅由 Host 在绑定窗口后通过 PID 读取，并作为不可变会话身份的一部分。
 
