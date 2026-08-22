@@ -226,18 +226,18 @@ Run the npm commands from `client`. Expected: all tests and builds pass with no 
 - Test: `tests/Maple.InputBroker.Tests/Broker/BrokerMovementLeaseSchedulerTests.cs`
 - Test: `tests/Maple.Host.Tests/Stationary/StationarySessionControllerTests.cs`
 
-- [ ] **Step 1: Write failing jitter regression tests**
+- [x] **Step 1: Write failing jitter regression tests**
 
-Assert that the planner reserves `20ms`, the Broker scheduler advertises a `15ms` wake-ahead window, and a requested `35ms` movement measured as `46ms` continues when the resulting real offset remains within the configured boundary. Add a separate assertion that a real offset outside the boundary still stops with `MOVEMENT_OFFSET_EXCEEDED`.
+Assert that the planner reserves `20ms`, a Broker short lease of at most `100ms` continuously checks the deadline without blocking, and a requested `35ms` movement measured as `46ms` continues when the resulting real offset remains within the configured boundary. Add separate assertions that Down call time is excluded from `actualHoldMs` and a real offset outside the boundary still stops with `MOVEMENT_OFFSET_EXCEEDED`.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run the three focused test classes. Expected: the margin and wake-ahead assertions fail, the bounded `11ms` jitter stops with `MOVEMENT_RELEASE_LATE`, and the overflow path reports the old lateness code.
 
-- [ ] **Step 3: Implement the revised policy**
+- [x] **Step 3: Implement the revised policy**
 
-Set `ReleaseSafetyMarginMs` to `20`. Make the Broker scheduler wake `15ms` before the physical deadline and spin until due. In the controller, validate timing, apply `actualHoldMs`, and stop only if the resulting absolute offset exceeds `MaxLateralMoveMs`; keep lateness in the existing structured log without making it a standalone stop condition.
+Set `ReleaseSafetyMarginMs` to `20`. Record `PressedAtMonoMs` after successful Down. Make the Broker scheduler continuously check short leases up to `100ms` and only block-wait for the earlier portion of longer leases. In the controller, validate timing, apply `actualHoldMs`, and stop only if the resulting absolute offset exceeds `MaxLateralMoveMs`; keep lateness in the existing structured log without making it a standalone stop condition.
 
-- [ ] **Step 4: Run focused and full verification**
+- [x] **Step 4: Run focused and full verification**
 
 Run all .NET tests, client tests/build, and both Windows x64 Release builds. Expected: zero test failures and zero compiler errors.

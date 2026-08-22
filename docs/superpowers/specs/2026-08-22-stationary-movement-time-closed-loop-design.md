@@ -24,7 +24,7 @@
 
 ## Broker 调度
 
-生产调度器只管理方向键租约，使用单一后台线程、单调时钟和 generation 防止旧截止释放新租约。调度线程必须在最近截止前至少 `15ms` 唤醒并短自旋到截止点，回调在调度器锁外执行；Broker 会话自己的锁负责串行化自动截止、显式 `KeyUp` 和 `ReleaseAll`。
+生产调度器只管理方向键租约，使用单一后台线程、单调时钟和 generation 防止旧截止释放新租约。对不超过 `100ms` 的短移动租约，调度线程登记后持续检查单调截止点，不执行可能过睡的阻塞等待；较长导航租约可等待到剩余 `100ms` 后进入持续检查。回调在调度器锁外执行；Broker 会话自己的锁负责串行化自动截止、显式 `KeyUp` 和 `ReleaseAll`。
 
 `250ms` watchdog 继续负责 heartbeat、窗口身份、失焦和最终兜底，不参与正常移动短按截止。
 
@@ -32,7 +32,7 @@
 
 Broker 响应增加可选字段：
 
-- `actualHoldMs`：成功物理 Down 到成功物理 Up 的单调时长；
+- `actualHoldMs`：成功物理 Down 调用返回后到成功物理 Up 调用返回后的单调时长；
 - `releaseLatenessMs`：`max(0, actualHoldMs - requestedLeaseMs)`。
 
 Host 的移动动作结果必须携带这两个字段。规划器只接受成功动作的 `actualHoldMs`，不能再用请求的 lease 更新 offset。日志必须同时记录请求时长、真实时长、迟到量和更新后的 offset。
