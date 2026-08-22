@@ -83,15 +83,24 @@ initialFacing（本次启动时用户确认的 Left/Right）
 
 启动会话时 `relativeOffsetMs = 0`，并锁定解析后的 `initialFacing`。向左按压使 offset 减少，向右按压使 offset 增加；方向符号可反过来，但整个实现必须统一。
 
-每次移动抽样流程：
+移动规划器使用 `20ms` 固定释放抖动余量，并按绝对偏移占 `maxLateralMoveMs` 的比例选择轮次意图：
 
-1. 根据 `relativeOffsetMs` 计算左、右剩余预算。
-2. 第一方向固定为 `initialFacing` 的反方向；该方向预算不足时当前会话安全停止，不能交换顺序，否则会改变最终朝向。
-3. 在第一方向的剩余预算和配置的 `[minHoldMs,maxHoldMs]` 交集内按 1ms 粒度抽样。
-4. 完成第一段后抽样间隔并等待。
-5. 第二段固定为 `initialFacing`，与第一方向相反；根据更新后的 offset 重新计算该方向预算，再独立抽样。
-6. 更新 offset，但不把它修正为 0。
-7. 完成稳定等待后进入下一阶段。
+- `0%–40%`：无偏随机，接受所有满足安全不变量的候选；
+- `>40%–70%`：以 `75%` 概率选择回中意图，以 `25%` 概率选择无偏随机；
+- `>70%–100%`：必须选择回中意图。
+
+回中意图只要求轮次结束时的 `abs(relativeOffsetMs)` 严格小于轮次开始值，不要求回到零点，也不指定固定目标。第一段和第二段仍分别执行随机抽样；约束只缩小合法候选集合。任何区域都禁止复制第一段时长、固定两段差值或在每轮末尾修正为零。
+
+每次移动流程：
+
+1. 保存轮次开始偏移并随机选择本轮意图。
+2. 第一方向固定为 `initialFacing` 的反方向。按当前真实 offset、配置边界、`20ms` 余量、本轮意图以及“完成第二段后仍给下一轮第一方向保留最小按压与余量”的可行性，计算第一段合法范围并按 1ms 粒度抽样。无合法值时安全停止，不能交换顺序。
+3. Host 请求 Broker 按下第一方向，等待计划时长后主动请求 `KeyUp`。Broker 返回成功物理 Down 至成功物理 Up 的 `actualHoldMs` 和 `releaseLatenessMs`。
+4. 校验真实时长后立即按方向符号提交第一段真实 offset。缺失、不在 `1–5,000ms` 内或越过配置边界时，以稳定错误码停止并 `ReleaseAll`。
+5. 基于更新后的真实 offset 抽样并等待两段间隔。
+6. 第二方向固定为 `initialFacing`。根据新的真实 offset、`20ms` 余量、本轮意图和下一轮第一方向预算重新计算合法范围，再按 1ms 粒度抽样；无合法值时安全停止。
+7. Host 主动完成第二方向 `KeyDown -> 等待 -> KeyUp`，校验并提交 Broker 返回的真实时长。轮次末 offset 不修正为零，并且必须满足本轮意图和下一轮预算不变量。
+8. 完成稳定等待后进入下一阶段。
 
 示例不是固定脚本：
 
@@ -107,6 +116,8 @@ initialFacing（本次启动时用户确认的 Left/Right）
 - 攻击持续时间最多 `60,000ms`，UI、配置、Host、协议和 Broker 验证器必须使用同一个硬上限。
 - 长按期间使用单一逻辑按键租约，不通过重复物理 `keybd_event` 制造点击；如需心跳/租约刷新，必须验证不会产生重复按下或提前释放。
 - 定点左右键由 Host 在计划保持结束后主动 `KeyUp`；Broker 租约仅通过 watchdog 提供超时兜底。Broker 协议必须标记定点请求，使其不进入自动寻路使用的移动截止调度器；寻路请求的现有调度行为保持不变。
+- Broker 对定点方向键记录成功物理 Down 返回后的单调时间和成功物理 Up 返回后的单调时间，并在显式 `KeyUp` 响应中返回 `actualHoldMs` 与 `releaseLatenessMs`。控制器逐段提交 `actualHoldMs`，不得按请求时长一次性提交整轮计划。
+- `actualHoldMs` 缺失、不在 `1–5,000ms` 内或提交后越过 `[-maxLateralMoveMs,+maxLateralMoveMs]` 时停止并 `ReleaseAll`。`releaseLatenessMs` 用于日志和实机余量校准；只要真实 offset 仍在边界内，单独的迟到量不构成停止条件。
 - Broker 的 `keybd_event` 编码沿用 Windows integrated 实机路径：攻击键同时发送虚拟键和 Set-1 扫描码；左右方向键再设置 extended flag。`Ctrl` 必须编码为 `VK_CONTROL (0x11) + scan 0x1D`，不能使用零扫描码。
 - 移动和攻击不能重叠；每个动作必须有成对的 `KeyDown/KeyUp`。
 - Broker 断开、心跳超时、窗口身份变化或安全门失败时，由 Broker watchdog 和 Host 双重释放。单个动作租约到期只释放活动键，不得解除已经绑定的目标；Host 随后发送的幂等 `KeyUp` 必须成功，后续移动仍可继续。
@@ -172,8 +183,11 @@ IAttackTriggerStrategy.ShouldAttack(ObservationContext context)
   "phaseDeadlineMonoMs": 123484227,
   "remainingMs": 18420,
   "updatedAtMonoMs": 123465807,
+  "relativeOffsetMs": -23,
   "earlyReleaseReason": null
 }
 ```
 
-每次重新抽样必须产生新 `cycleId` 或明确的新阶段事件，前端必须以新的 deadline 重置倒计时。停止和异常事件必须使旧 session 的倒计时失效，不能继续递减。
+`relativeOffsetMs` 是 Host 权威的会话级计算偏移。负数表示左、正数表示右；每段移动真实时长提交后，随紧接着的阶段消息立即更新。识别开关不影响该字段。前端在角色信息区域显示带符号值和方向文字，停止后保留最终值，下一次开始时重置为 `0`。
+
+每次重新抽样必须产生新 `cycleId` 或明确的新阶段事件，前端必须以新的 deadline 重置倒计时。停止和异常事件必须使旧 session 的倒计时失效，不能继续递减，但不得清除本次会话最终 `relativeOffsetMs`。

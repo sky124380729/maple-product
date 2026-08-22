@@ -2,6 +2,8 @@
 
 日期：2026-08-22
 
+状态：已废弃。定点攻击不得使用本文的 Broker 自动截止方案；后续设计由 [`2026-08-22-stationary-bounded-random-movement-design.md`](2026-08-22-stationary-bounded-random-movement-design.md) 取代。自动寻路的 Broker 截止调度不受影响。
+
 ## 目标
 
 在没有视觉位置反馈的前提下，以 Broker 实际发出的方向键 `keybd_event` 按下和释放时间差作为唯一位移依据，把会话净偏移限制在用户配置的每侧最大偏移内。左按 40ms、右按 30ms 后的净偏移为向左 10ms；相反方向移动会恢复对应安全空间。

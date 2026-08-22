@@ -1,5 +1,7 @@
 # Stationary Movement Time Closed Loop Implementation Plan
 
+> **Superseded:** Do not execute this plan for stationary attack. It uses the rejected Broker-deadline release path and is replaced by `docs/superpowers/specs/2026-08-22-stationary-bounded-random-movement-design.md`. Navigation deadline scheduling remains separate.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Bound stationary movement by Broker-measured direction-key hold durations instead of requested durations, with a 10ms release guard.
