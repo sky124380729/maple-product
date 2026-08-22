@@ -85,10 +85,10 @@ initialFacing（本次启动时用户确认的 Left/Right）
 
 每次移动抽样流程：
 
-1. 根据真实按压时长形成的 `relativeOffsetMs` 计算左、右剩余预算，并扣除固定 `10ms` 的 Broker 释放安全余量。
+1. 根据真实按压时长形成的 `relativeOffsetMs` 计算左、右剩余预算，并扣除固定 `20ms` 的 Broker 释放安全余量。
 2. 第一方向固定为 `initialFacing` 的反方向；该方向预算不足时当前会话安全停止，不能交换顺序，否则会改变最终朝向。
-3. 在第一方向扣除 `10ms` 安全余量后的剩余预算和配置的 `[minHoldMs,maxHoldMs]` 交集内按 1ms 粒度抽样。
-4. Broker 完成第一段物理释放并返回 `actualHoldMs`；规划器按真实时长更新 offset。真实时长缺失、非法或释放迟到超过 `10ms` 时安全停止。
+3. 在第一方向扣除 `20ms` 安全余量后的剩余预算和配置的 `[minHoldMs,maxHoldMs]` 交集内按 1ms 粒度抽样。
+4. Broker 完成第一段物理释放并返回 `actualHoldMs`；规划器按真实时长更新 offset。真实时长缺失、非法或更新后的真实 offset 越界时安全停止。释放迟到超过 `10ms` 只记录诊断，不在 offset 仍处于边界内时停止会话。
 5. 第一段成功提交后抽样间隔并等待。
 6. 第二段固定为 `initialFacing`，与第一方向相反；根据真实更新后的 offset 重新计算该方向预算，再独立抽样。
 7. Broker 完成第二段物理释放后按真实时长更新 offset，但不把它修正为 0。
@@ -107,11 +107,11 @@ initialFacing（本次启动时用户确认的 Left/Right）
 
 - 攻击持续时间最多 `60,000ms`，UI、配置、Host、协议和 Broker 验证器必须使用同一个硬上限。
 - 长按期间使用单一逻辑按键租约，不通过重复物理 `keybd_event` 制造点击；如需心跳/租约刷新，必须验证不会产生重复按下或提前释放。
-- `leaseMs` 作为 Host 计划保持时长传给 Broker。左右方向键由独立短租约调度器在 Broker 内物理释放，并返回成功 Down/Up 的 `actualHoldMs` 与相对 lease 的 `releaseLatenessMs`；watchdog 只负责断联、心跳和安全门兜底释放。
+- `leaseMs` 作为 Host 计划保持时长传给 Broker。左右方向键由独立短租约调度器在 Broker 内物理释放，并返回成功 Down/Up 的 `actualHoldMs` 与相对 lease 的 `releaseLatenessMs`；调度线程在截止前至少 `15ms` 唤醒并短自旋，watchdog 只负责断联、心跳和安全门兜底释放。
 - Host 仍发送 `KeyUp` 作为正常收尾；`KEY_UP_SENT` 和自动截止后的幂等 `KEY_ALREADY_UP` 都是成功结果。攻击键不注册移动短截止，继续由 Host 正常收尾。
 - Broker 的 `keybd_event` 编码沿用 Windows integrated 实机路径：攻击键同时发送虚拟键和 Set-1 扫描码；左右方向键再设置 extended flag。`Ctrl` 必须编码为 `VK_CONTROL (0x11) + scan 0x1D`，不能使用零扫描码。
 - 移动和攻击不能重叠；每个动作必须有成对的 `KeyDown/KeyUp`。
-- Broker 断开、心跳超时、窗口身份变化或安全门失败时，由 Broker watchdog 和 Host 双重释放。单个移动动作租约到期只释放活动键，不得解除已经绑定的目标；Host 随后发送的幂等 `KeyUp` 必须成功。真实时长或迟到量不满足移动安全约束时，控制器必须停止而不是继续下一轮。
+- Broker 断开、心跳超时、窗口身份变化或安全门失败时，由 Broker watchdog 和 Host 双重释放。单个移动动作租约到期只释放活动键，不得解除已经绑定的目标；Host 随后发送的幂等 `KeyUp` 必须成功。真实时长缺失或非法、物理释放失败、真实 offset 越界时，控制器必须停止而不是继续下一轮；单独的迟到量超出 `10ms` 只作为调度诊断。
 
 ## 6. 攻击触发策略接口
 
