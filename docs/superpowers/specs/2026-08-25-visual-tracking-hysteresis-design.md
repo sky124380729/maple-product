@@ -14,7 +14,7 @@ Initial acquisition and established tracking both use a two-level search. The fa
 
 The green safe interior, edge guard width, and recenter band never crop either recognition pass; they authorize movement only after identity has been resolved. A local score below `0.68`, a yellow-area recovery score below `0.70`, ambiguity, an unconfirmed jump, a stale frame, or capture failure still revokes movement authorization immediately.
 
-The yellow-area pass uses a viewport-scaled coarse step of `clamp(ceil(4 * frameWidth / 1366), 2, 8)`. It then refines both the best spatial peak and the best peak outside the same-target exclusion radius at single-pixel resolution. Final ordering and ambiguity use the refined scores. Local anchor matching remains single-pixel. This preserves full-area coverage and second-person rejection without multiplying the eight-template hot path by every yellow-area pixel.
+The yellow-area pass evaluates every pixel position with the 16 strongest edge samples from each template bank. It then reevaluates a `2px` neighborhood around both the best spatial peak and the best peak outside the same-target exclusion radius using the full sample banks (up to 128 samples each). Final ordering and ambiguity use the full refined scores. Local anchor matching uses full banks directly. This preserves exact-pixel full-area coverage and second-person rejection without multiplying the eight-template hot path by all 128 samples at every yellow-area pixel.
 
 ## Scope
 
@@ -30,6 +30,6 @@ Only the appearance tracking threshold, candidate low-texture guard, two-level a
 - A previously established character displaced beyond the local window is found anywhere inside the yellow platform rectangle.
 - A new session can acquire the configured appearance anywhere inside the yellow platform rectangle without redrawing the blue source.
 - A distant yellow-area candidate can rebase only after three unique `0.70` recovery frames.
-- The maximum eight-template bank can acquire an off-grid yellow-area candidate through coarse-to-fine refinement.
-- Two off-grid spatial candidates remain ambiguous after both peaks are refined.
+- The maximum eight-template bank can acquire an arbitrary-pixel yellow-area candidate through sparse-to-full refinement.
+- Two arbitrary-pixel spatial candidates remain ambiguous after both peaks are fully refined.
 - Existing ambiguity and jump tests continue to pass.

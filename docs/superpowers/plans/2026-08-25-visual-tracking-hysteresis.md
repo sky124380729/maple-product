@@ -32,7 +32,7 @@
 - [ ] Track the candidate sample luminance range in `Score` and return invalid evidence when the range is below `16`.
 - [ ] Change `CharacterTrackingScoreThreshold` from `0.70` to `0.68` while leaving `CharacterAcquisitionScoreThreshold` at `0.70`.
 - [ ] Add a yellow-platform recovery pass after local loss and rebase an established track only after three high-confidence stable frames.
-- [ ] Add viewport-scaled coarse-to-fine matching for yellow-area passes and refine both spatial peaks.
+- [ ] Add per-pixel sparse-feature coarse matching for yellow-area passes and fully refine both spatial peaks.
 - [ ] Re-run the focused stabilizer tests and verify all pass.
 - [ ] Run `dotnet test MapleProduct.sln -c Release` and verify the full .NET suite passes.
 
