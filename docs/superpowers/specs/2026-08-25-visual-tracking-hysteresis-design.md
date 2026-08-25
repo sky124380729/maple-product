@@ -14,6 +14,8 @@ Initial acquisition and established tracking both use a two-level search. The fa
 
 The green safe interior, edge guard width, and recenter band never crop either recognition pass; they authorize movement only after identity has been resolved. A local score below `0.68`, a yellow-area recovery score below `0.70`, ambiguity, an unconfirmed jump, a stale frame, or capture failure still revokes movement authorization immediately.
 
+The yellow-area pass uses a viewport-scaled coarse step of `clamp(ceil(4 * frameWidth / 1366), 2, 8)`. It then refines both the best spatial peak and the best peak outside the same-target exclusion radius at single-pixel resolution. Final ordering and ambiguity use the refined scores. Local anchor matching remains single-pixel. This preserves full-area coverage and second-person rejection without multiplying the eight-template hot path by every yellow-area pixel.
+
 ## Scope
 
 Only the appearance tracking threshold, candidate low-texture guard, two-level appearance search, relocation stability, and their tests change. Initial acquisition, random movement, platform correction, fallback timing, and name-template compatibility remain unchanged.
@@ -28,4 +30,6 @@ Only the appearance tracking threshold, candidate low-texture guard, two-level a
 - A previously established character displaced beyond the local window is found anywhere inside the yellow platform rectangle.
 - A new session can acquire the configured appearance anywhere inside the yellow platform rectangle without redrawing the blue source.
 - A distant yellow-area candidate can rebase only after three unique `0.70` recovery frames.
+- The maximum eight-template bank can acquire an off-grid yellow-area candidate through coarse-to-fine refinement.
+- Two off-grid spatial candidates remain ambiguous after both peaks are refined.
 - Existing ambiguity and jump tests continue to pass.
