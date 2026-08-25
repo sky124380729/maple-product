@@ -4,7 +4,7 @@
 
 **Goal:** Prevent an established local character track from being lost when its score fluctuates just below the 70% acquisition threshold.
 
-**Architecture:** Keep acquisition and established tracking as separate thresholds in `VisualStationaryObservationSession`. Reuse the existing `SelfIdentityStabilizer` local-anchor, peak-margin, jump, and recovery behavior; only supply a 0.68 tracking threshold for appearance profiles.
+**Architecture:** Keep acquisition and established tracking as separate thresholds in `VisualStationaryObservationSession`. Reject low-texture candidate patches before applying the robust occlusion score, then reuse the existing `SelfIdentityStabilizer` local-anchor, peak-margin, jump, and recovery behavior with a 0.68 tracking threshold for appearance profiles.
 
 **Tech Stack:** .NET 8, C#, xUnit
 
@@ -22,9 +22,16 @@
 ### Task 2: Implement the threshold split
 
 **Files:**
+- Modify: `src/Maple.Host/Stationary/SelfAppearanceTemplateMatcher.cs`
 - Modify: `src/Maple.Host/Stationary/VisualStationaryObservationSession.cs`
+- Modify: `tests/Maple.Host.Tests/Stationary/SelfAppearanceTemplateMatcherTests.cs`
 
+- [ ] Add a failing matcher test proving a uniform missing-character patch scores below `0.68`.
+- [ ] Add a regression proving the appearance search area is independent of the green safe interior.
+- [ ] Add regressions proving a character beyond `12px` is found across the yellow platform and requires three recovery frames before rebasing.
+- [ ] Track the candidate sample luminance range in `Score` and return invalid evidence when the range is below `16`.
 - [ ] Change `CharacterTrackingScoreThreshold` from `0.70` to `0.68` while leaving `CharacterAcquisitionScoreThreshold` at `0.70`.
+- [ ] Add a yellow-platform recovery pass after local loss and rebase an established track only after three high-confidence stable frames.
 - [ ] Re-run the focused stabilizer tests and verify all pass.
 - [ ] Run `dotnet test MapleProduct.sln -c Release` and verify the full .NET suite passes.
 
