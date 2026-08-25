@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Maple.Host.Navigation;
@@ -135,7 +136,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         var diagnosticsBar = new Border
         {
             Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(224, 20, 25, 24)),
-            Child = diagnostics
+            Child = CreateDiagnosticsPanel(diagnostics)
         };
         Grid.SetRow(diagnosticsBar, 2);
         grid.Children.Add(diagnosticsBar);
@@ -174,6 +175,20 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         await session.StartAsync(hwnd, cancellationToken);
         await SetRecognitionAsync(hwnd, recognitionEnabled || startRecording, cancellationToken);
         if (startRecording) await StartRecordingAsync();
+    }
+
+    private static StackPanel CreateDiagnosticsPanel(TextBlock diagnostics)
+    {
+        var legend = new TextBlock { Margin = new Thickness(12, 5, 12, 0), FontSize = 12 };
+        legend.Inlines.Add(new Run("黄 平台外框") { Foreground = System.Windows.Media.Brushes.Gold });
+        legend.Inlines.Add(new Run("   绿 双向随机区") { Foreground = System.Windows.Media.Brushes.LimeGreen });
+        legend.Inlines.Add(new Run("   蓝 人物模板") { Foreground = System.Windows.Media.Brushes.DeepSkyBlue });
+        legend.Inlines.Add(new Run("   青 可信本人") { Foreground = System.Windows.Media.Brushes.Cyan });
+        legend.Inlines.Add(new Run("   橙 候选") { Foreground = System.Windows.Media.Brushes.Orange });
+        var panel = new StackPanel();
+        panel.Children.Add(legend);
+        panel.Children.Add(diagnostics);
+        return panel;
     }
 
     public async ValueTask DisposeAsync()

@@ -5,7 +5,7 @@ namespace Maple.Host.Tests.Stationary;
 public sealed class VisualPreviewOverlayLayoutTests
 {
     [Fact]
-    public void Labels_saved_geometry_and_the_live_trusted_identity_without_color_guessing()
+    public void Keeps_saved_and_live_geometry_without_attached_text()
     {
         VisualStationaryProfile profile = Profile();
         var observation = new VisualStationaryObservation(
@@ -19,14 +19,15 @@ public sealed class VisualPreviewOverlayLayoutTests
 
         IReadOnlyList<VisualPreviewOverlay> overlays = VisualPreviewOverlayLayout.Create(profile, observation);
 
+        Assert.Null(typeof(VisualPreviewOverlay).GetProperty("Label"));
         Assert.Contains(overlays, item =>
-            item.Kind == VisualPreviewOverlayKind.PlatformBoundary && item.Label == "平台外边界");
+            item.Kind == VisualPreviewOverlayKind.PlatformBoundary && item.Bounds == profile.Platform);
         Assert.Contains(overlays, item =>
-            item.Kind == VisualPreviewOverlayKind.SafeInterior && item.Label == "随机移动安全内区");
+            item.Kind == VisualPreviewOverlayKind.SafeInterior && item.Bounds == new FrameRect(34, 60, 112, 24));
         Assert.Contains(overlays, item =>
-            item.Kind == VisualPreviewOverlayKind.CharacterTemplate && item.Label == "人物模板");
+            item.Kind == VisualPreviewOverlayKind.CharacterTemplate && item.Bounds == profile.CharacterAppearance!.Source);
         Assert.Contains(overlays, item =>
-            item.Kind == VisualPreviewOverlayKind.TrustedIdentity && item.Label == "实时本人 78%");
+            item.Kind == VisualPreviewOverlayKind.TrustedIdentity && item.Bounds == new FrameRect(82, 20, 16, 16));
     }
 
     [Fact]
@@ -52,7 +53,7 @@ public sealed class VisualPreviewOverlayLayoutTests
         IReadOnlyList<VisualPreviewOverlay> overlays = VisualPreviewOverlayLayout.Create(profile, observation);
 
         Assert.Contains(overlays, item =>
-            item.Kind == VisualPreviewOverlayKind.IdentityCandidate && item.Label == "实时候选 69%");
+            item.Kind == VisualPreviewOverlayKind.IdentityCandidate && item.Bounds == new FrameRect(80, 20, 16, 16));
         Assert.DoesNotContain(overlays, item => item.Kind == VisualPreviewOverlayKind.TrustedIdentity);
     }
 

@@ -115,9 +115,8 @@ internal sealed class VisualStationarySetupController(
         {
             foreach (VisualPreviewOverlay item in VisualPreviewOverlayLayout.Create(profile, observation))
             {
-                (System.Windows.Media.Brush stroke, WpfColor fill, LabelPosition labelPosition) =
-                    OverlayStyle(item.Kind);
-                AddRectangle(item.Bounds, stroke, fill, 2, item.Label, labelPosition);
+                (System.Windows.Media.Brush stroke, WpfColor fill) = OverlayStyle(item.Kind);
+                AddRectangle(item.Bounds, stroke, fill, 2);
             }
             return;
         }
@@ -125,7 +124,7 @@ internal sealed class VisualStationarySetupController(
         if (platformToDraw.HasValue)
         {
             AddRectangle(platformToDraw.Value, WpfBrushes.Gold,
-                WpfColor.FromArgb(35, 255, 196, 0), 2, "平台外边界", LabelPosition.TopInside);
+                WpfColor.FromArgb(35, 255, 196, 0), 2);
             int guard = Math.Max(1, (int)Math.Ceiling(32d * frame.Width / 1366d));
             if (platformToDraw.Value.Width > guard * 2)
             {
@@ -135,7 +134,7 @@ internal sealed class VisualStationarySetupController(
                     Width = platformToDraw.Value.Width - guard * 2
                 };
                 AddRectangle(safe, WpfBrushes.LimeGreen,
-                    WpfColor.FromArgb(24, 50, 205, 90), 2, "随机移动安全内区", LabelPosition.SecondLineInside);
+                    WpfColor.FromArgb(24, 50, 205, 90), 2);
             }
         }
         FrameRect? identityToDraw = characterSource ?? profile?.CharacterAppearance?.Source;
@@ -144,7 +143,7 @@ internal sealed class VisualStationarySetupController(
             identityToDraw = profile.NameSource;
         if (identityToDraw.HasValue)
             AddRectangle(identityToDraw.Value, WpfBrushes.DeepSkyBlue,
-                WpfColor.FromArgb(24, 0, 191, 255), 2, "人物模板", LabelPosition.BottomOutside);
+                WpfColor.FromArgb(24, 0, 191, 255), 2);
         if (dragStart.HasValue && dragCurrent.HasValue)
         {
             FrameRect? current = MapDrag(dragStart.Value, dragCurrent.Value, frame);
@@ -153,9 +152,7 @@ internal sealed class VisualStationarySetupController(
                     current.Value,
                     step == SetupStep.Platform ? WpfBrushes.Gold : WpfBrushes.DeepSkyBlue,
                     WpfColor.FromArgb(28, 255, 255, 255),
-                    2,
-                    step == SetupStep.Platform ? "正在框选平台" : "正在框选人物模板",
-                    LabelPosition.TopInside);
+                    2);
         }
     }
 
@@ -337,9 +334,7 @@ internal sealed class VisualStationarySetupController(
         FrameRect frameRectangle,
         System.Windows.Media.Brush stroke,
         System.Windows.Media.Color fill,
-        double thickness,
-        string label,
-        LabelPosition labelPosition)
+        double thickness)
     {
         CapturedFrame? frame = frozenFrame ?? latestFrame();
         if (frame is null) return;
@@ -362,48 +357,21 @@ internal sealed class VisualStationarySetupController(
         Canvas.SetTop(rectangle, y);
         overlay.Children.Add(rectangle);
         visualElements.Add(rectangle);
-        var caption = new Border
-        {
-            Background = new SolidColorBrush(WpfColor.FromArgb(210, 12, 18, 17)),
-            BorderBrush = stroke,
-            BorderThickness = new Thickness(1),
-            Padding = new Thickness(4, 1, 4, 2),
-            IsHitTestVisible = false,
-            Child = new TextBlock
-            {
-                Text = label,
-                Foreground = stroke,
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold
-            }
-        };
-        double captionTop = labelPosition switch
-        {
-            LabelPosition.SecondLineInside => y + 23,
-            LabelPosition.BottomOutside => Math.Min(
-                Math.Max(0, overlay.ActualHeight - 22),
-                y + height + 2),
-            _ => y + 2
-        };
-        Canvas.SetLeft(caption, x + 2);
-        Canvas.SetTop(caption, captionTop);
-        overlay.Children.Add(caption);
-        visualElements.Add(caption);
     }
 
-    private static (System.Windows.Media.Brush Stroke, WpfColor Fill, LabelPosition LabelPosition)
+    private static (System.Windows.Media.Brush Stroke, WpfColor Fill)
         OverlayStyle(VisualPreviewOverlayKind kind) => kind switch
         {
             VisualPreviewOverlayKind.PlatformBoundary =>
-                (WpfBrushes.Gold, WpfColor.FromArgb(35, 255, 196, 0), LabelPosition.TopInside),
+                (WpfBrushes.Gold, WpfColor.FromArgb(35, 255, 196, 0)),
             VisualPreviewOverlayKind.SafeInterior =>
-                (WpfBrushes.LimeGreen, WpfColor.FromArgb(24, 50, 205, 90), LabelPosition.SecondLineInside),
+                (WpfBrushes.LimeGreen, WpfColor.FromArgb(24, 50, 205, 90)),
             VisualPreviewOverlayKind.CharacterTemplate =>
-                (WpfBrushes.DeepSkyBlue, WpfColor.FromArgb(24, 0, 191, 255), LabelPosition.BottomOutside),
+                (WpfBrushes.DeepSkyBlue, WpfColor.FromArgb(24, 0, 191, 255)),
             VisualPreviewOverlayKind.TrustedIdentity =>
-                (WpfBrushes.Cyan, WpfColor.FromArgb(30, 0, 255, 255), LabelPosition.TopInside),
+                (WpfBrushes.Cyan, WpfColor.FromArgb(30, 0, 255, 255)),
             _ =>
-                (WpfBrushes.Orange, WpfColor.FromArgb(28, 255, 165, 0), LabelPosition.TopInside)
+                (WpfBrushes.Orange, WpfColor.FromArgb(28, 255, 165, 0))
         };
 
     private void Detach()
@@ -426,5 +394,4 @@ internal sealed class VisualStationarySetupController(
     }
 
     private enum SetupStep { None, Platform, Character, Calibrating }
-    private enum LabelPosition { TopInside, SecondLineInside, BottomOutside }
 }

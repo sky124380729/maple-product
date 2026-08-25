@@ -277,6 +277,46 @@ public sealed class VisualStationarySessionControllerTests
     }
 
     [Fact]
+    public async Task Inward_correction_restores_initial_facing_before_the_next_attack()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var actions = new RecordingActions();
+        int attackCount = 0;
+        actions.AttackKeyPressed = () =>
+        {
+            attackCount++;
+            if (attackCount == 2) cancellation.Cancel();
+        };
+        var observations = new FakeObservations(
+            State(VisualSafetyState.Safe, 10, 360),
+            State(VisualSafetyState.Safe, 12, 340),
+            State(VisualSafetyState.Safe, 14, 320),
+            State(VisualSafetyState.Safe, 16, 330));
+        var visualPublisher = new RecordingVisualPublisher();
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            visualPublisher: visualPublisher);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, cancellation.Token);
+
+        Assert.Equal(
+            ["Down:Attack", "Up:Attack",
+             "Down:MoveLeft", "Up:MoveLeft",
+             "Down:MoveLeft", "Up:MoveLeft",
+             "Down:MoveRight", "Up:MoveRight",
+             "Down:Attack", "Up:Attack", "ReleaseAll"],
+            actions.Events);
+        int pendingIndex = visualPublisher.States.FindIndex(
+            state => state.Code == "VISUAL_FACING_RESTORE_PENDING");
+        int restoredIndex = visualPublisher.States.FindIndex(
+            state => state.Code == "VISUAL_FACING_RESTORED");
+        Assert.True(pendingIndex >= 0);
+        Assert.True(restoredIndex > pendingIndex);
+    }
+
+    [Fact]
     public async Task Safe_state_executes_randomized_pair_and_waits_for_fresh_feedback_after_each_segment()
     {
         var actions = new RecordingActions();

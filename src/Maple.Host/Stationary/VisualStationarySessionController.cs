@@ -207,7 +207,7 @@ public sealed class VisualStationarySessionController(
             : null;
         if (correction.HasValue)
         {
-            await TryMoveAsync(
+            bool correctionExecuted = await TryMoveAsync(
                 sessionId,
                 cycleId,
                 StationaryPhase.MoveSecond,
@@ -215,6 +215,16 @@ public sealed class VisualStationarySessionController(
                 sampledAttackDurationMs,
                 config,
                 cancellationToken);
+            if (correctionExecuted && correction.Value != initialFacing)
+            {
+                await RestoreInitialFacingAsync(
+                    sessionId,
+                    cycleId,
+                    initialFacing,
+                    sampledAttackDurationMs,
+                    config,
+                    cancellationToken);
+            }
             return;
         }
 
@@ -541,15 +551,17 @@ public sealed class VisualStationarySessionController(
                 }
                 if (current is { IdentityTrusted: true } && observations.IsLatestFresh(MaximumObservationAge))
                 {
-                    bool restored = await TryMoveAsync(
+                    MovementDirection restoreDirection =
+                        movementPlanner.RequiredInwardDirection(current.Platform) ?? initialFacing;
+                    bool moved = await TryMoveAsync(
                         sessionId,
                         cycleId,
                         StationaryPhase.MoveSecond,
-                        initialFacing,
+                        restoreDirection,
                         sampledAttackDurationMs,
                         config,
                         cancellationToken);
-                    if (restored)
+                    if (moved && restoreDirection == initialFacing)
                     {
                         facingRestorePending = false;
                         PublishVisual(
@@ -560,6 +572,7 @@ public sealed class VisualStationarySessionController(
                         return;
                     }
                     current = observations.Latest;
+                    if (moved) continue;
                 }
 
                 long feedbackBarrier = current?.FrameSequence ?? 0;

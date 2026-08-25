@@ -11,8 +11,7 @@ public enum VisualPreviewOverlayKind
 
 public sealed record VisualPreviewOverlay(
     VisualPreviewOverlayKind Kind,
-    FrameRect Bounds,
-    string Label);
+    FrameRect Bounds);
 
 public static class VisualPreviewOverlayLayout
 {
@@ -22,7 +21,7 @@ public static class VisualPreviewOverlayLayout
     {
         var overlays = new List<VisualPreviewOverlay>
         {
-            new(VisualPreviewOverlayKind.PlatformBoundary, profile.Platform, "平台外边界")
+            new(VisualPreviewOverlayKind.PlatformBoundary, profile.Platform)
         };
 
         int guardWidth = observation?.Platform.GuardWidthPx ??
@@ -35,8 +34,7 @@ public static class VisualPreviewOverlayLayout
                 {
                     X = profile.Platform.X + guardWidth,
                     Width = profile.Platform.Width - guardWidth * 2
-                },
-                "随机移动安全内区"));
+                }));
         }
 
         FrameRect template = profile.IdentityKind == VisualIdentityKind.CharacterAppearance
@@ -44,8 +42,7 @@ public static class VisualPreviewOverlayLayout
             : profile.NameSource;
         overlays.Add(new VisualPreviewOverlay(
             VisualPreviewOverlayKind.CharacterTemplate,
-            template,
-            "人物模板"));
+            template));
 
         if (observation?.IdentityCandidate is { } candidate)
         {
@@ -54,12 +51,8 @@ public static class VisualPreviewOverlayLayout
                 trusted
                     ? VisualPreviewOverlayKind.TrustedIdentity
                     : VisualPreviewOverlayKind.IdentityCandidate,
-                candidate.Bounds,
-                $"{(trusted ? "实时本人" : "实时候选")} {Percent(candidate.Score)}"));
+                candidate.Bounds));
         }
         return overlays;
     }
-
-    private static string Percent(double score) =>
-        $"{Math.Round(Math.Clamp(score, 0, 1) * 100, MidpointRounding.AwayFromZero):0}%";
 }
