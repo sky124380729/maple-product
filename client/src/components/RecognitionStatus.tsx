@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react'
 import { Progress, Tag, Typography } from 'antd'
 import type { RecognitionSnapshotView } from '../bridge/types'
 
-export function RecognitionStatus({ snapshot }: { snapshot: RecognitionSnapshotView | null }) {
+export function RecognitionStatus({
+  snapshot,
+  relativeOffsetMs,
+}: {
+  snapshot: RecognitionSnapshotView | null
+  relativeOffsetMs: number | null
+}) {
   const [elapsedMs, setElapsedMs] = useState(0)
   const snapshotKey = snapshot == null ? 'none' : [snapshot.health, snapshot.faultCode, snapshot.hud.characterName, snapshot.hud.level, snapshot.hud.job, snapshot.hud.hpCurrent, snapshot.hud.hpMax, snapshot.hud.mpCurrent, snapshot.hud.mpMax, snapshot.hud.expPercent].join('|')
   useEffect(() => {
@@ -34,6 +40,12 @@ export function RecognitionStatus({ snapshot }: { snapshot: RecognitionSnapshotV
         <Typography.Text>{hud?.level == null ? 'Lv.-' : `Lv.${hud.level}`}</Typography.Text>
         <Typography.Text type="secondary">{hud?.job || '职业未识别'}</Typography.Text>
       </div>
+      <div className="recognition-offset-row">
+        <Typography.Text type="secondary">计算偏移</Typography.Text>
+        <Typography.Text strong data-testid="relative-offset">
+          {formatRelativeOffset(relativeOffsetMs)}
+        </Typography.Text>
+      </div>
       <ResourceRow label="HP" current={hud?.hpCurrent} maximum={hud?.hpMax} ratio={hud?.hpPercent} color="#d94a4a" />
       <ResourceRow label="MP" current={hud?.mpCurrent} maximum={hud?.mpMax} ratio={hud?.mpPercent} color="#3586d8" />
       <div className="recognition-meta">
@@ -47,6 +59,13 @@ export function RecognitionStatus({ snapshot }: { snapshot: RecognitionSnapshotV
       {snapshot?.faultCode && <Typography.Text type="danger">{snapshot.faultCode}</Typography.Text>}
     </section>
   )
+}
+
+function formatRelativeOffset(relativeOffsetMs: number | null): string {
+  if (relativeOffsetMs == null) return '-'
+  if (relativeOffsetMs < 0) return `${relativeOffsetMs} ms（左）`
+  if (relativeOffsetMs > 0) return `+${relativeOffsetMs} ms（右）`
+  return '0 ms（中心）'
 }
 
 function ResourceRow({ label, current, maximum, ratio, color }: {

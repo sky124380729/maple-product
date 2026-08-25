@@ -14,6 +14,8 @@ using Maple.Host.Recognition;
 using Maple.Host.Safety;
 using Maple.Host.Stationary;
 using Maple.Host.Windows;
+using Maple.Host.Navigation;
+using Maple.Host.Preview;
 
 namespace Maple.WindowsHost;
 
@@ -35,6 +37,8 @@ public partial class MainWindow : Window
     private AbnormalTerminationRecord? lastAbnormal;
     private StationarySessionApplicationService? sessionService;
     private CancellationTokenSource? sessionCancellation;
+    private StationarySessionRun? stationarySessionRun;
+    private int visualProfileMutationBlockCount;
     private IBrokerConnection? connection;
     private BrokerHeartbeatLoop? heartbeatLoop;
     private Preview.PreviewWindowHost? previewHost;
@@ -55,6 +59,7 @@ public partial class MainWindow : Window
             requestedStopReason = "OPERATOR_REQUESTED";
             lifetime.Cancel();
             Task.Run(() => StopStationaryAsync("OPERATOR_REQUESTED")).GetAwaiter().GetResult();
+            Task.Run(() => StopNavigationAsync("OPERATOR_REQUESTED")).GetAwaiter().GetResult();
             previewHost?.DisposeAsync().AsTask().GetAwaiter().GetResult();
             notificationSink.Dispose();
             sessionLog.Dispose();
@@ -101,6 +106,10 @@ public partial class MainWindow : Window
             switch (command)
             {
                 case "loadConfig": PublishLoadedConfig(); break;
+                case "loadNavigationCatalog": await LoadNavigationCatalogAsync(); break;
+                case "chooseMapDirectory": await ChooseMapDirectoryAsync(); break;
+                case "startNavigation": await StartNavigationAsync(document.RootElement.GetProperty("packagePath").GetString()); break;
+                case "stopNavigation": await StopNavigationAsync("OPERATOR_REQUESTED"); break;
                 case "saveConfig": await SaveConfigAsync(document.RootElement.GetProperty("config")); break;
                 case "startStationary":
                     await StartStationaryAsync(
@@ -124,6 +133,21 @@ public partial class MainWindow : Window
                 case "stopMapRecording":
                     if (previewHost is not null)
                         await previewHost.StopRecordingAsync("OPERATOR_STOPPED");
+                    break;
+                case "openVisualStationarySetup":
+                    await OpenPreviewAsync(recognitionEnabled: false);
+                    previewHost?.BeginVisualSetup();
+                    break;
+                case "clearVisualStationaryProfile":
+                    if (stationarySessionRun is { IsCompleted: false } || navigationRuntime is not null)
+                    {
+                        PublishBridgeMessage(new { type = "visualStationary.config.error", error = "VISUAL_PROFILE_CLEAR_RUNNING" });
+                        break;
+                    }
+                    VisualProfileDeleteResult cleared = await EnsurePreviewHost()
+                        .ClearVisualProfileAsync(lifetime.Token);
+                    if (!cleared.Success)
+                        PublishBridgeMessage(new { type = "visualStationary.config.error", error = cleared.Code });
                     break;
             }
         }
@@ -166,6 +190,7 @@ public partial class MainWindow : Window
 
     private async Task StartStationaryAsync(JsonElement element, string? initialFacing)
     {
+        await StopNavigationAsync("MODE_SWITCHED");
         StationaryAttackConfig? config = element.Deserialize<StationaryAttackConfig>(JsonOptions);
         ConfigValidationResult? validation = config is null ? null : StationaryConfigValidator.Validate(config);
         if (config is null || validation is null || !validation.IsValid)
@@ -176,6 +201,12 @@ public partial class MainWindow : Window
         if (sessionService is null)
         {
             PublishBridgeMessage(new { type = "stationary.error", error = "HOST_NOT_READY" });
+            return;
+        }
+
+        if (config.AttackTriggerMode == AttackTriggerMode.VisualSafeContinuous)
+        {
+            await StartVisualStationaryAsync(config, initialFacing);
             return;
         }
 
@@ -262,8 +293,9 @@ public partial class MainWindow : Window
             new StationaryMovementPlanner(random),
             new AlwaysAttackTriggerStrategy(),
             random,
-            publisher);
-        _ = Task.Run(async () =>
+            publisher,
+            new SessionLogMovementTelemetrySink(sessionLog));
+        Task runTask = Task.Run(async () =>
         {
             await controller.RunAsync(
                 prepared.SessionId,
@@ -276,12 +308,34 @@ public partial class MainWindow : Window
                 activeCancellation,
                 activeRecognitionSession,
                 activeRecognitionLease);
-        }, activeCancellation.Token);
+        });
+        stationarySessionRun = new StationarySessionRun(
+            activeCancellation,
+            runTask,
+            () => AbortStationaryRunAsync(
+                activeConnection,
+                activeHeartbeat,
+                activeCancellation,
+                activeRecognitionSession,
+                activeRecognitionLease));
     }
 
     private async Task StopStationaryAsync(string reason)
     {
         requestedStopReason = reason;
+        StationarySessionRun? activeRun = stationarySessionRun;
+        stationarySessionRun = null;
+        if (activeRun is not null)
+        {
+            await activeRun.StopAsync();
+            return;
+        }
+
+        await ForceCleanupStationaryResourcesAsync();
+    }
+
+    private async Task ForceCleanupStationaryResourcesAsync()
+    {
         CancellationTokenSource? cancellationToDispose = sessionCancellation;
         sessionCancellation = null;
         IBrokerConnection? connectionToDispose = connection;
@@ -292,6 +346,7 @@ public partial class MainWindow : Window
         recognitionLease = null;
         RecognitionSession? recognitionSessionToDispose = recognitionSession;
         recognitionSession = null;
+        visualObservation = null;
 
         cancellationToDispose?.Cancel();
         cancellationToDispose?.Dispose();
@@ -306,6 +361,33 @@ public partial class MainWindow : Window
         if (heartbeatToDispose is not null) await heartbeatToDispose.DisposeAsync();
         if (connectionToDispose is not null) await connectionToDispose.DisposeAsync();
         boundTarget = null;
+    }
+
+    private Task AbortStationaryRunAsync(
+        IBrokerConnection activeConnection,
+        BrokerHeartbeatLoop activeHeartbeat,
+        CancellationTokenSource activeCancellation,
+        RecognitionSession? activeRecognitionSession,
+        IAsyncDisposable? activeRecognitionLease)
+    {
+        if (ReferenceEquals(sessionCancellation, activeCancellation)) sessionCancellation = null;
+        if (ReferenceEquals(connection, activeConnection))
+        {
+            connection = null;
+            boundTarget = null;
+        }
+        if (ReferenceEquals(heartbeatLoop, activeHeartbeat)) heartbeatLoop = null;
+        if (ReferenceEquals(recognitionSession, activeRecognitionSession)) recognitionSession = null;
+        if (ReferenceEquals(recognitionLease, activeRecognitionLease)) recognitionLease = null;
+        try
+        {
+            activeCancellation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        activeConnection.Abort();
+        return Task.CompletedTask;
     }
 
     private void PublishBridgeMessage(object message)
@@ -368,13 +450,51 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (previewHost is null)
-        {
-            previewHost = new Preview.PreviewWindowHost();
-            previewHost.RecognitionSnapshotPublished += OnRecognitionSnapshot;
-        }
-        await previewHost.ShowAsync(targetResolution.Target.Hwnd, lifetime.Token, recognitionEnabled, startRecording);
+        await EnsurePreviewHost().ShowAsync(targetResolution.Target.Hwnd, lifetime.Token, recognitionEnabled, startRecording);
     }
+
+    private Preview.PreviewWindowHost EnsurePreviewHost()
+    {
+        if (previewHost is not null) return previewHost;
+        previewHost = new Preview.PreviewWindowHost();
+        previewHost.CanClearVisualProfile = CanModifyVisualProfile;
+        previewHost.Faulted += OnPreviewFaulted;
+        previewHost.Closed += OnPreviewClosed;
+        previewHost.RecognitionSnapshotPublished += OnRecognitionSnapshot;
+        previewHost.VisualProfileUpdated += OnVisualProfileUpdated;
+        previewHost.VisualProfileStatusChanged += OnVisualProfileStatusChanged;
+        return previewHost;
+    }
+
+    private bool CanModifyVisualProfile() =>
+        Volatile.Read(ref visualProfileMutationBlockCount) == 0 &&
+        stationarySessionRun is not { IsCompleted: false } &&
+        navigationRuntime is null;
+
+    private void OnPreviewFaulted(PreviewFault fault)
+    {
+        if (!ReferenceEquals(visualObservation, previewHost?.CurrentVisualObservation))
+            visualObservation?.MarkUntrusted(fault.Code);
+    }
+
+    private void OnPreviewClosed()
+    {
+        if (!ReferenceEquals(visualObservation, previewHost?.CurrentVisualObservation))
+            visualObservation?.MarkUntrusted("PREVIEW_CLOSED");
+    }
+
+    private void OnVisualProfileStatusChanged(string status) =>
+        PublishBridgeMessage(new { type = "visualStationary.config.updated", status });
+
+    private void OnVisualProfileUpdated(VisualStationaryProfile profile) =>
+        PublishBridgeMessage(new
+        {
+            type = "visualStationary.config.updated",
+            status = "ready",
+            frameWidth = profile.FrameWidth,
+            frameHeight = profile.FrameHeight,
+            updatedAtUtc = profile.UpdatedAtUtc
+        });
 
     private void OnRecognitionSnapshot(RecognitionSnapshot snapshot) =>
         recognitionBridgePublisher.TryPublish(snapshot, Environment.TickCount64);

@@ -128,4 +128,44 @@ public sealed class StationaryConfigValidatorTests
 
         Assert.Contains(result.Errors, error => error.Code == "ATTACK_TRIGGER_DISABLED");
     }
+
+    [Fact]
+    public void Accepts_visual_safe_continuous_mode_without_enabling_monster_trigger()
+    {
+        StationaryAttackConfig config = StationaryAttackConfig.Default with
+        {
+            AttackTriggerMode = AttackTriggerMode.VisualSafeContinuous
+        };
+
+        ConfigValidationResult result = StationaryConfigValidator.Validate(config);
+
+        Assert.True(result.IsValid);
+        Assert.DoesNotContain(result.Errors, error => error.Code == "ATTACK_TRIGGER_DISABLED");
+    }
+
+    [Fact]
+    public void Rejects_move_hold_above_broker_limit()
+    {
+        StationaryAttackConfig config = StationaryAttackConfig.Default with { MoveHoldMaxMs = 5_001 };
+
+        ConfigValidationResult result = StationaryConfigValidator.Validate(config);
+
+        Assert.Contains(result.Errors, error =>
+            error.Field == "moveHold" && error.Code == "MOVE_HOLD_LIMIT");
+    }
+
+    [Fact]
+    public void Rejects_budget_smaller_than_minimum_hold_plus_release_margin()
+    {
+        StationaryAttackConfig config = StationaryAttackConfig.Default with
+        {
+            MoveHoldMinMs = 30,
+            MaxLateralMoveMs = 49
+        };
+
+        ConfigValidationResult result = StationaryConfigValidator.Validate(config);
+
+        Assert.Contains(result.Errors, error =>
+            error.Field == "maxLateralMoveMs" && error.Code == "MOVE_BUDGET_TOO_SMALL");
+    }
 }

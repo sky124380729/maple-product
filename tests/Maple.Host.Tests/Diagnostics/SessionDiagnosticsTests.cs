@@ -1,5 +1,7 @@
 using System.Text.Json;
+using Maple.Core.Movement;
 using Maple.Host.Diagnostics;
+using Maple.Host.Stationary;
 
 namespace Maple.Host.Tests.Diagnostics;
 
@@ -47,5 +49,40 @@ public sealed class SessionDiagnosticsTests
         await File.WriteAllTextAsync(path, "{invalid");
 
         Assert.Null(await new LastAbnormalTerminationStore(path).LoadAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Writes_stationary_movement_telemetry_as_typed_json_fields()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "maple-movement-log-tests", Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(directory, "session.jsonl");
+        using var log = new JsonLineSessionLog(path);
+        var sink = new SessionLogMovementTelemetrySink(log);
+        Guid sessionId = Guid.NewGuid();
+
+        await sink.WriteAsync(
+            new StationaryMovementTelemetry(
+                sessionId,
+                7,
+                MovementDirection.Left,
+                MovementIntent.ReturnTowardCenter,
+                RequestedHoldMs: 40,
+                ActualHoldMs: 46,
+                ReleaseLatenessMs: 6,
+                OffsetBeforeMs: -12,
+                OffsetAfterMs: -58,
+                MaxLateralMoveMs: 80),
+            CancellationToken.None);
+
+        using JsonDocument document = JsonDocument.Parse(Assert.Single(await File.ReadAllLinesAsync(path)));
+        JsonElement root = document.RootElement;
+        Assert.Equal("Left", root.GetProperty("direction").GetString());
+        Assert.Equal("ReturnTowardCenter", root.GetProperty("movementIntent").GetString());
+        Assert.Equal(40, root.GetProperty("requestedHoldMs").GetInt32());
+        Assert.Equal(46, root.GetProperty("actualHoldMs").GetInt32());
+        Assert.Equal(6, root.GetProperty("releaseLatenessMs").GetInt32());
+        Assert.Equal(-12, root.GetProperty("offsetBeforeMs").GetInt32());
+        Assert.Equal(-58, root.GetProperty("offsetAfterMs").GetInt32());
+        Assert.Equal(80, root.GetProperty("maxLateralMoveMs").GetInt32());
     }
 }

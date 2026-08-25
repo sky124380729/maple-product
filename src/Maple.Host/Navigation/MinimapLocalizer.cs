@@ -2,9 +2,11 @@ using Maple.Host.Preview;
 
 namespace Maple.Host.Navigation;
 
-public sealed class MinimapLocalizer(MapSignatureMatcher? signatureMatcher = null)
+public sealed class MinimapLocalizer(MapViewportProjection? viewportProjection = null)
 {
-    private readonly MapSignatureMatcher matcher = signatureMatcher ?? new MapSignatureMatcher();
+    private const double PlayerMarkerAnchorOffset = 7;
+    private readonly MapViewportProjection projection = viewportProjection ?? new MapViewportProjection();
+    private readonly MapSignatureMatcher matcher = new(viewportProjection);
 
     public NavigationLocalization Observe(
         CapturedFrame frame,
@@ -12,18 +14,33 @@ public sealed class MinimapLocalizer(MapSignatureMatcher? signatureMatcher = nul
         NavigationTraversal traversal)
     {
         MapSignatureMatch signature = matcher.Match(frame, map);
-        if (map.MinimapRect is not MapMinimapRect roi || signature.FaultCode == "MAP_VIEWPORT_MISMATCH")
+        if (map.MinimapRect is not MapMinimapRect logicalRoi
+            || !projection.TryProject(frame, logicalRoi, map.MinimapReferenceTopInset, out ProjectedMapViewport viewport)
+            || signature.FaultCode == "MAP_VIEWPORT_MISMATCH")
             return new NavigationLocalization(frame.Sequence, frame.CapturedAtMonoMs, false, signature.Confidence, null, null, signature.FaultCode);
+        if (!signature.IsMatch)
+            return new NavigationLocalization(frame.Sequence, frame.CapturedAtMonoMs, false, signature.Confidence, null, null, signature.FaultCode ?? "MAP_MISMATCH");
 
-        MapPoint? self = FindSelf(frame, roi);
+        MapPoint? detected = FindSelf(frame, viewport.MinimapRect, viewport.Scale);
+        MapPoint? self = detected is null
+            ? null
+            : new MapPoint(
+                detected.X - signature.LogicalOffsetX,
+                detected.Y - signature.LogicalOffsetY + PlayerMarkerAnchorOffset);
         if (self is null)
             return new NavigationLocalization(frame.Sequence, frame.CapturedAtMonoMs, signature.IsMatch, signature.Confidence, null, null, "SELF_NOT_LOCALIZED");
 
-        MapPlatform[] candidates = map.Platforms.Where(platform =>
-            self.X >= platform.XMin - 3
-            && self.X <= platform.XMax + 3
-            && Math.Abs(self.Y - platform.Y) <= 5).ToArray();
+        MapPlatform[] verticalCandidates = map.Platforms.Where(platform =>
+            Math.Abs(self.Y - platform.Y) <= 5).ToArray();
+        MapPlatform[] candidates = verticalCandidates.Where(platform =>
+            DistanceToRange(self.X, platform.XMin, platform.XMax) <= 3).ToArray();
         int? platformId = candidates.Length == 1 ? candidates[0].Id : null;
+        if (candidates.Length == 0)
+        {
+            MapPlatform[] recoveryCandidates = verticalCandidates.Where(platform =>
+                DistanceToRange(self.X, platform.XMin, platform.XMax) <= 12).ToArray();
+            if (recoveryCandidates.Length == 1) platformId = recoveryCandidates[0].Id;
+        }
         string? fault = platformId is null && traversal != NavigationTraversal.Connector
             ? "SELF_NOT_LOCALIZED"
             : signature.FaultCode;
@@ -37,7 +54,7 @@ public sealed class MinimapLocalizer(MapSignatureMatcher? signatureMatcher = nul
             fault);
     }
 
-    private static MapPoint? FindSelf(CapturedFrame frame, MapMinimapRect roi)
+    private static MapPoint? FindSelf(CapturedFrame frame, MapMinimapRect roi, double scale)
     {
         bool[] mask = new bool[roi.Width * roi.Height];
         ReadOnlySpan<byte> pixels = frame.BgraPixels.Span;
@@ -85,6 +102,11 @@ public sealed class MinimapLocalizer(MapSignatureMatcher? signatureMatcher = nul
             bestX = sumX / (double)count;
             bestY = sumY / (double)count;
         }
-        return bestCount == 0 ? null : new MapPoint(bestX, bestY);
+        return bestCount == 0 ? null : new MapPoint(
+            MapViewportProjection.ToLogical(bestX, scale),
+            MapViewportProjection.ToLogical(bestY, scale));
     }
+
+    private static double DistanceToRange(double value, double minimum, double maximum) =>
+        value < minimum ? minimum - value : value > maximum ? value - maximum : 0;
 }

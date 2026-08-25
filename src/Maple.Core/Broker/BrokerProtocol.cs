@@ -2,7 +2,8 @@ namespace Maple.Core.Broker;
 
 public static class BrokerProtocol
 {
-    public const int Version = 2;
+    public const int Version = 4;
+    public const int StationaryMovementReleaseSafetyMarginMs = 20;
 }
 
 public enum BrokerCommandKind
@@ -18,7 +19,15 @@ public enum BrokerLogicalAction
 {
     Attack,
     MoveLeft,
-    MoveRight
+    MoveRight,
+    MoveUp,
+    MoveDown
+}
+
+public enum BrokerMovementReleaseMode
+{
+    BrokerDeadline,
+    HostKeyUp
 }
 
 public sealed record BrokerTargetIdentity(long Hwnd, int ProcessId, string ProcessPath, long ProcessStartedAtUnixMs);
@@ -30,7 +39,8 @@ public sealed record BrokerRequest(
     BrokerCommandKind Kind,
     BrokerLogicalAction? Action,
     string? Key,
-    int LeaseMs);
+    int LeaseMs,
+    BrokerMovementReleaseMode MovementReleaseMode = BrokerMovementReleaseMode.BrokerDeadline);
 
 public sealed record BrokerResponse(
     int ProtocolVersion,

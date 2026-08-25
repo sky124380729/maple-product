@@ -18,6 +18,8 @@ public sealed class KeybdEventInputAdapterTests
     [InlineData("V", 0x56, 0x2F, false)]
     [InlineData("Left", 0x25, 0x4B, true)]
     [InlineData("Right", 0x27, 0x4D, true)]
+    [InlineData("Up", 0x26, 0x48, true)]
+    [InlineData("Down", 0x28, 0x50, true)]
     public void Maps_logical_keys_to_the_verified_windows_encoding(
         string key,
         byte expectedVirtualKey,

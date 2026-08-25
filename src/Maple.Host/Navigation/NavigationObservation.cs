@@ -57,6 +57,16 @@ public sealed class NavigationLocalizationGate
             armed = false;
             return observation with { MapMatched = false, FaultCode = "MAP_MISMATCH" };
         }
-        return observation with { MapMatched = armed, FaultCode = armed ? null : observation.FaultCode };
+        if (armed && consecutiveMismatches > 0)
+            return observation with { MapMatched = false, FaultCode = "MAP_VALIDATION_PENDING" };
+        return observation with
+        {
+            MapMatched = armed,
+            FaultCode = armed
+                ? null
+                : observation.MapMatched
+                    ? "MAP_VALIDATION_PENDING"
+                    : observation.FaultCode
+        };
     }
 }

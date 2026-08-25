@@ -37,6 +37,8 @@ public sealed class KeybdEventInputAdapter : IBrokerKeySender
             "V" => ((byte)0x56, (byte)0x2F, false),
             "LEFT" => ((byte)0x25, (byte)0x4B, true),
             "RIGHT" => ((byte)0x27, (byte)0x4D, true),
+            "UP" => ((byte)0x26, (byte)0x48, true),
+            "DOWN" => ((byte)0x28, (byte)0x50, true),
             _ => ((byte)0, (byte)0, false)
         };
         return virtualKey != 0;

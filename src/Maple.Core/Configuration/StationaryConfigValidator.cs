@@ -1,3 +1,5 @@
+using Maple.Core.Movement;
+
 namespace Maple.Core.Configuration;
 
 public static class StationaryConfigValidator
@@ -26,10 +28,12 @@ public static class StationaryConfigValidator
         }
 
         ValidateRange("moveHold", config.MoveHoldMinMs, config.MoveHoldMaxMs);
+        if (config.MoveHoldMaxMs > StationaryAttackConfig.MovementDurationLimitMs)
+            Add("moveHold", "MOVE_HOLD_LIMIT");
         ValidateRange("moveGap", config.MoveGapMinMs, config.MoveGapMaxMs);
         ValidateRange("stabilize", config.StabilizeMinMs, config.StabilizeMaxMs);
         ValidateRange("rest", config.RestMinMs, config.RestMaxMs);
-        if (config.MaxLateralMoveMs < config.MoveHoldMinMs)
+        if (config.MaxLateralMoveMs < config.MoveHoldMinMs + StationaryMovementPlanner.ReleaseSafetyMarginMs)
             Add("maxLateralMoveMs", "MOVE_BUDGET_TOO_SMALL");
         if (config.RestProbabilityPercent is < 0 or > 100)
             Add("restProbabilityPercent", "REST_PROBABILITY_INVALID");

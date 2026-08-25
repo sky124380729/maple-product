@@ -32,4 +32,5 @@ public sealed record StationaryRhythmState(
     long PhaseDeadlineMonoMs,
     int RemainingMs,
     long UpdatedAtMonoMs,
-    string? EarlyReleaseReason);
+    string? EarlyReleaseReason,
+    int RelativeOffsetMs = 0);

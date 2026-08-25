@@ -6,8 +6,14 @@ type BridgeCommand =
   | { command: 'startStationary'; config: StationaryAttackConfig; initialFacing: 'left' | 'right' }
   | { command: 'stopStationary' }
   | { command: 'openPreview'; recognitionEnabled: boolean }
+  | { command: 'openVisualStationarySetup' }
+  | { command: 'clearVisualStationaryProfile' }
   | { command: 'startMapRecording'; recognitionEnabled: boolean }
   | { command: 'stopMapRecording' }
+  | { command: 'loadNavigationCatalog' }
+  | { command: 'chooseMapDirectory' }
+  | { command: 'startNavigation'; packagePath: string }
+  | { command: 'stopNavigation' }
 
 declare global {
   interface Window {

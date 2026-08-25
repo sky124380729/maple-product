@@ -1,4 +1,5 @@
 using Maple.Core.Configuration;
+using Maple.Core.Movement;
 using Maple.Core.Session;
 
 namespace Maple.Host.Stationary;
@@ -61,4 +62,21 @@ public interface IStationaryConfigProvider
 public interface IStationaryStatePublisher
 {
     void Publish(StationaryRhythmState state);
+}
+
+public sealed record StationaryMovementTelemetry(
+    Guid SessionId,
+    long CycleId,
+    MovementDirection Direction,
+    MovementIntent Intent,
+    int RequestedHoldMs,
+    int ActualHoldMs,
+    int ReleaseLatenessMs,
+    int OffsetBeforeMs,
+    int OffsetAfterMs,
+    int MaxLateralMoveMs);
+
+public interface IStationaryMovementTelemetrySink
+{
+    Task WriteAsync(StationaryMovementTelemetry telemetry, CancellationToken cancellationToken);
 }

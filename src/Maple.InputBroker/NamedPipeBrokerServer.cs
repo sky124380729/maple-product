@@ -45,10 +45,12 @@ public sealed class NamedPipeBrokerServer
         }
 
         await BrokerWireCodec.WriteAsync(pipe, handshakeResult, cancellationToken);
+        var brokerClock = new EnvironmentBrokerClock();
         await using var session = new BrokerInputSession(
             new KeybdEventInputAdapter(),
-            new EnvironmentBrokerClock(),
+            brokerClock,
             new ProcessTargetSafetyGate(),
+            new BrokerMovementLeaseScheduler(brokerClock),
             heartbeatTimeoutMs: 2_000);
         session.Arm(target, secret);
         using var watchdogCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

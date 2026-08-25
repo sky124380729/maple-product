@@ -23,7 +23,9 @@ public sealed record NavigationState(
     int? TargetPlatformId,
     ImmutableArray<int> Route,
     NavigationInputAction? Action,
-    string? FaultCode);
+    string? FaultCode,
+    double? LocalizationConfidence = null,
+    MapPoint? Self = null);
 
 public sealed record NavigationStop(string Code);
 

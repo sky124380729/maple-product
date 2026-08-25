@@ -52,6 +52,38 @@ describe('validateStationaryConfig', () => {
       expect.objectContaining({ name: ['moveGapMinMs'] }),
     ]))
   })
+
+  it('accepts the independent visual-safe continuous mode', () => {
+    expect(validateStationaryConfig({
+      ...validConfig,
+      attackTriggerMode: 'visualSafeContinuous' as never,
+    })).toEqual({ valid: true, errors: [] })
+  })
+
+  it('rejects a movement hold above the Broker limit', () => {
+    const result = validateStationaryConfig({
+      ...validConfig,
+      moveHoldMaxMs: 5_001,
+    })
+
+    expect(result.errors).toContainEqual(expect.objectContaining({
+      name: ['moveHoldMaxMs'],
+      code: 'MOVE_HOLD_LIMIT',
+    }))
+  })
+
+  it('rejects a lateral budget smaller than the minimum hold plus release margin', () => {
+    const result = validateStationaryConfig({
+      ...validConfig,
+      moveHoldMinMs: 30,
+      maxLateralMoveMs: 49,
+    })
+
+    expect(result.errors).toContainEqual(expect.objectContaining({
+      name: ['maxLateralMoveMs'],
+      code: 'MOVE_BUDGET_TOO_SMALL',
+    }))
+  })
 })
 
 describe('hostErrorMessage', () => {
@@ -63,5 +95,19 @@ describe('hostErrorMessage', () => {
   it('maps focus diagnostics with a foreground handle to the focus-loss message', () => {
     expect(hostErrorMessage('FOCUS_LOST:foreground=1182182'))
       .toBe('游戏窗口失去前台，已安全停止输入；请保持游戏窗口为当前前台窗口后重新开始')
+  })
+
+  it('maps stationary movement safety validation errors', () => {
+    expect(hostErrorMessage('MOVE_HOLD_LIMIT')).toBe('移动按压最大值不能超过 5000 ms')
+    expect(hostErrorMessage('MOVE_BUDGET_TOO_SMALL')).toBe('每侧最大累计偏移至少要比移动按压最小值多 20 ms')
+  })
+
+  it('maps visual appearance startup diagnostics without referring to character names', () => {
+    expect(hostErrorMessage('VISUAL_SELF_NOT_TRUSTED'))
+      .toBe('未能稳定锁定自己的人物外观，请检查人物框选或遮挡后重试')
+    expect(hostErrorMessage('VISUAL_NAME_SCORE_LOW'))
+      .toBe('人物外观暂时低于锁定阈值，已保留原视觉配置并继续尝试识别')
+    expect(hostErrorMessage('VISUAL_NAME_AMBIGUOUS'))
+      .toBe('人物外观候选位置不唯一，请等待遮挡减少后重试')
   })
 })

@@ -1,4 +1,5 @@
 using Maple.Core.Broker;
+using System.Diagnostics;
 
 namespace Maple.InputBroker;
 
@@ -9,7 +10,41 @@ public interface IBrokerClock
 
 public sealed class EnvironmentBrokerClock : IBrokerClock
 {
-    public long NowMonoMs => Environment.TickCount64;
+    public long NowMonoMs =>
+        (long)(Stopwatch.GetTimestamp() * (1_000d / Stopwatch.Frequency));
+}
+
+public interface IMovementLeaseScheduler : IAsyncDisposable
+{
+    void Schedule(
+        BrokerLogicalAction action,
+        long generation,
+        long deadlineMonoMs,
+        Action<BrokerLogicalAction, long> onExpired);
+
+    void Cancel(BrokerLogicalAction action, long generation);
+    void CancelAll();
+}
+
+internal sealed class NoopMovementLeaseScheduler : IMovementLeaseScheduler
+{
+    public void Schedule(
+        BrokerLogicalAction action,
+        long generation,
+        long deadlineMonoMs,
+        Action<BrokerLogicalAction, long> onExpired)
+    {
+    }
+
+    public void Cancel(BrokerLogicalAction action, long generation)
+    {
+    }
+
+    public void CancelAll()
+    {
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
 public interface IBrokerKeySender

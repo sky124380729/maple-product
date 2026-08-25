@@ -11,7 +11,7 @@ public sealed record BgraTemplate(
 
 public sealed record MonsterCandidate(double X, double Y, double Width, double Height, double Confidence);
 
-public sealed class MonsterTemplateMatcher
+public sealed class MonsterTemplateMatcher(double referenceWidth = 1366)
 {
     public IReadOnlyList<MonsterCandidate> Match(
         CapturedFrame frame,
@@ -20,20 +20,30 @@ public sealed class MonsterTemplateMatcher
         MapMinimapRect? minimapRect)
     {
         List<MonsterCandidate> found = [];
+        if (!double.IsFinite(referenceWidth) || referenceWidth <= 0
+            || frame.Width <= 0 || frame.Height <= 0 || frame.Stride < frame.Width * 4
+            || frame.BgraPixels.Length < (long)frame.Stride * frame.Height)
+            return found;
+        double scale = Math.Clamp(frame.Width / referenceWidth, 0.5, 2.5);
         foreach (BgraTemplate template in templates)
         {
             if (template.Width <= 0 || template.Height <= 0
-                || template.Pixels.Length < template.Width * template.Height * 4
-                || template.Width > frame.Width || template.Height > frame.Height)
+                || template.Pixels.Length < (long)template.Width * template.Height * 4)
                 continue;
-            int maxY = Math.Max(0, (int)(frame.Height * 0.86) - template.Height);
+            TemplateSample[] samples = BuildSamples(template);
+            int scaledWidth = Math.Max(1, (int)Math.Round(template.Width * scale));
+            int scaledHeight = Math.Max(1, (int)Math.Round(template.Height * scale));
+            if (samples.Length < 8
+                || scaledWidth > frame.Width || scaledHeight > frame.Height)
+                continue;
+            int maxY = Math.Max(0, (int)(frame.Height * 0.86) - scaledHeight);
             for (int y = 0; y <= maxY; y += 2)
-            for (int x = 0; x <= frame.Width - template.Width; x += 2)
+            for (int x = 0; x <= frame.Width - scaledWidth; x += 2)
             {
-                if (OverlapsMinimap(x, y, template.Width, template.Height, minimapRect)) continue;
-                double score = Score(frame, template, x, y);
+                if (OverlapsMinimap(x, y, scaledWidth, scaledHeight, minimapRect)) continue;
+                double score = Score(frame, samples, x, y, scale);
                 if (score < threshold) continue;
-                MonsterCandidate candidate = new(x, y, template.Width, template.Height, score);
+                MonsterCandidate candidate = new(x, y, scaledWidth, scaledHeight, score);
                 if (found.Any(item => IoU(item, candidate) > 0.3)) continue;
                 found.Add(candidate);
                 if (found.Count >= 24) return found;
@@ -42,27 +52,59 @@ public sealed class MonsterTemplateMatcher
         return found.OrderByDescending(candidate => candidate.Confidence).ToArray();
     }
 
-    private static double Score(CapturedFrame frame, BgraTemplate template, int x, int y)
+    private static double Score(
+        CapturedFrame frame,
+        IReadOnlyList<TemplateSample> samples,
+        int x,
+        int y,
+        double scale)
     {
-        ReadOnlySpan<byte> source = template.Pixels.Span;
         ReadOnlySpan<byte> target = frame.BgraPixels.Span;
-        int sampled = 0;
-        double score = 0;
-        int step = Math.Max(1, template.Width * template.Height / 64);
-        for (int pixel = 0; pixel < template.Width * template.Height; pixel += step)
+        double sourceSum = 0, targetSum = 0;
+        double sourceSquared = 0, targetSquared = 0, product = 0;
+        int colorMatches = 0;
+        foreach (TemplateSample sample in samples)
         {
-            int sourceOffset = pixel * 4;
-            if (source[sourceOffset + 3] < 100) continue;
-            int localX = pixel % template.Width;
-            int localY = pixel / template.Width;
+            int localX = (int)Math.Round(sample.X * scale);
+            int localY = (int)Math.Round(sample.Y * scale);
             int targetOffset = (y + localY) * frame.Stride + (x + localX) * 4;
-            int distance = Math.Abs(source[sourceOffset] - target[targetOffset])
-                + Math.Abs(source[sourceOffset + 1] - target[targetOffset + 1])
-                + Math.Abs(source[sourceOffset + 2] - target[targetOffset + 2]);
-            score += 1 - Math.Min(765, distance) / 765d;
-            sampled++;
+            int distance = 0;
+            for (int channel = 0; channel < 3; channel++)
+            {
+                double sourceValue = sample.Bgr[channel];
+                double targetValue = target[targetOffset + channel];
+                sourceSum += sourceValue;
+                targetSum += targetValue;
+                sourceSquared += sourceValue * sourceValue;
+                targetSquared += targetValue * targetValue;
+                product += sourceValue * targetValue;
+                distance += (int)Math.Abs(sourceValue - targetValue);
+            }
+            if (distance <= 140) colorMatches++;
         }
-        return sampled == 0 ? 0 : score / sampled;
+        if (colorMatches < samples.Count * 0.30) return 0;
+        int count = samples.Count * 3;
+        double covariance = product - sourceSum * targetSum / count;
+        double sourceVariance = sourceSquared - sourceSum * sourceSum / count;
+        double targetVariance = targetSquared - targetSum * targetSum / count;
+        double denominator = Math.Sqrt(Math.Max(0, sourceVariance) * Math.Max(0, targetVariance));
+        return denominator <= 0.000_001 ? 0 : Math.Clamp(covariance / denominator, -1, 1);
+    }
+
+    private static TemplateSample[] BuildSamples(BgraTemplate template)
+    {
+        ReadOnlySpan<byte> pixels = template.Pixels.Span;
+        List<TemplateSample> opaque = [];
+        for (int y = 0; y < template.Height; y++)
+        for (int x = 0; x < template.Width; x++)
+        {
+            int offset = (y * template.Width + x) * 4;
+            if (pixels[offset + 3] < 100) continue;
+            opaque.Add(new TemplateSample(x, y, [pixels[offset], pixels[offset + 1], pixels[offset + 2]]));
+        }
+        if (opaque.Count <= 64) return [.. opaque];
+        double step = opaque.Count / 64d;
+        return Enumerable.Range(0, 64).Select(index => opaque[(int)(index * step)]).ToArray();
     }
 
     private static bool OverlapsMinimap(int x, int y, int width, int height, MapMinimapRect? roi) =>
@@ -76,6 +118,8 @@ public sealed class MonsterTemplateMatcher
         double union = a.Width * a.Height + b.Width * b.Height - intersection;
         return union <= 0 ? 0 : intersection / union;
     }
+
+    private sealed record TemplateSample(int X, int Y, byte[] Bgr);
 }
 
 public sealed class MonsterTargetStabilizer

@@ -6,19 +6,25 @@ import {
   Form,
   InputNumber,
   Modal,
+  Popconfirm,
+  Segmented,
   Select,
   Space,
+  Tag,
   Typography,
   theme,
 } from 'antd'
-import { ArrowLeftOutlined, ArrowRightOutlined, EyeOutlined, PlayCircleOutlined, SaveOutlined, StopOutlined, VideoCameraOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, ArrowRightOutlined, DeleteOutlined, EyeOutlined, PlayCircleOutlined, SafetyCertificateOutlined, SaveOutlined, StopOutlined, VideoCameraOutlined } from '@ant-design/icons'
 import { AttackModeField } from '../components/AttackModeField'
 import { AttackBandsEditor } from '../components/AttackBandsEditor'
 import { AdvancedParametersCollapse } from '../components/AdvancedParametersCollapse'
 import { SessionStatusPanel } from '../components/SessionStatusPanel'
 import { RecognitionToggle } from '../components/RecognitionToggle'
+import { NavigationControls } from '../components/NavigationControls'
+import { NavigationStatus } from '../components/NavigationStatus'
 import { postBridgeCommand, subscribeBridgeMessages } from '../bridge/bridge'
-import { safeDefaults, type RecognitionSnapshotView, type StationaryAttackConfig } from '../bridge/types'
+import { safeDefaults, type RecognitionSnapshotView, type StationaryAttackConfig, type VisualStationaryStateView } from '../bridge/types'
+import type { NavigationCatalogEntry, NavigationStateView } from '../bridge/navigationTypes'
 import { hostErrorMessage, validateStationaryConfig, type ConfigValidationError } from '../bridge/configValidation'
 import { initialSessionState, sessionReducer } from '../state/sessionReducer'
 import '../styles/app.css'
@@ -34,6 +40,15 @@ export function StationaryAttackPage() {
   const [abnormalTermination, setAbnormalTermination] = useState<string | null>(null)
   const [pendingStartConfig, setPendingStartConfig] = useState<StationaryAttackConfig | null>(null)
   const [recognition, setRecognition] = useState<RecognitionSnapshotView | null>(null)
+  const [visualSafety, setVisualSafety] = useState<VisualStationaryStateView | null>(null)
+  const [visualConfigStatus, setVisualConfigStatus] = useState<string>('notConfigured')
+  const [mode, setMode] = useState<'stationary' | 'navigation'>('stationary')
+  const [mapDirectory, setMapDirectory] = useState<string | null>(null)
+  const [mapEntries, setMapEntries] = useState<NavigationCatalogEntry[]>([])
+  const [selectedMap, setSelectedMap] = useState<string | null>(null)
+  const [navigationRunning, setNavigationRunning] = useState(false)
+  const [navigationState, setNavigationState] = useState<NavigationStateView | null>(null)
+  const [navigationError, setNavigationError] = useState<string | null>(null)
   const running = session.status === 'running' || session.status === 'locating' || session.status === 'arming'
 
   const applyHostValidationErrors = useCallback((errors: Array<{ field: string; code: string }>) => {
@@ -49,7 +64,7 @@ export function StationaryAttackPage() {
       if (!message || typeof message !== 'object') return
       const data = message as {
         type?: string
-        state?: typeof session.rhythm
+        state?: typeof session.rhythm | NavigationStateView | VisualStationaryStateView
         reason?: string
         error?: string
         warning?: string | null
@@ -57,6 +72,8 @@ export function StationaryAttackPage() {
         validationErrors?: Array<{ field: string; code: string }>
         record?: { reason?: string; stoppedAtUtc?: string }
         snapshot?: RecognitionSnapshotView
+        directory?: string | null
+        entries?: NavigationCatalogEntry[]
       }
       if (data.type === 'config.loaded' && data.config) {
         form.setFieldsValue({ ...data.config, attackBands: data.config.attackBands.map((band) => ({ ...band })) })
@@ -66,8 +83,14 @@ export function StationaryAttackPage() {
         setSaving(false)
         setConfigError(null)
       }
-      if (data.type === 'stationary.rhythm.updated' && data.state) dispatch({ type: 'rhythmUpdated', payload: data.state })
-      if (data.type === 'stationary.stopped') dispatch({ type: 'stopped', reason: data.reason ?? 'HOST_STOPPED' })
+      if (data.type === 'stationary.rhythm.updated' && data.state) dispatch({ type: 'rhythmUpdated', payload: data.state as NonNullable<typeof session.rhythm> })
+      if (data.type === 'stationary.stopped') {
+        dispatch({
+          type: 'stopped',
+          reason: data.reason ?? 'HOST_STOPPED',
+          payload: data.state as NonNullable<typeof session.rhythm> | undefined,
+        })
+      }
       if (data.type === 'stationary.error') {
         const messageText = hostErrorMessage(data.error ?? '运行异常')
         setSaving(false)
@@ -81,8 +104,27 @@ export function StationaryAttackPage() {
           : `上次运行异常停止：${data.record.reason}`)
       }
       if (data.type === 'recognition.snapshot' && data.snapshot) setRecognition(data.snapshot)
+      if (data.type === 'visualStationary.state.updated' && data.state) setVisualSafety(data.state as VisualStationaryStateView)
+      if (data.type === 'visualStationary.config.updated') {
+        setVisualConfigStatus((data as { status?: string }).status ?? 'ready')
+        setConfigError(null)
+      }
+      if (data.type === 'visualStationary.config.error') {
+        setConfigError(hostErrorMessage(data.error ?? '清空视觉配置失败，请重试'))
+      }
+      if (data.type === 'navigation.catalog.loaded') {
+        setMapDirectory(data.directory ?? null)
+        const entries = data.entries ?? []
+        setMapEntries(entries)
+        setSelectedMap((current) => current && entries.some((entry) => entry.packagePath === current && entry.canRun) ? current : null)
+      }
+      if (data.type === 'navigation.started') { setNavigationRunning(true); setNavigationError(null) }
+      if (data.type === 'navigation.state.updated' && data.state) setNavigationState(data.state as NavigationStateView)
+      if (data.type === 'navigation.stopped') setNavigationRunning(false)
+      if (data.type === 'navigation.error') { setNavigationRunning(false); setNavigationError(data.error ?? 'NAVIGATION_FAILED') }
     })
     postBridgeCommand({ command: 'loadConfig' })
+    postBridgeCommand({ command: 'loadNavigationCatalog' })
     return unsubscribe
   }, [applyHostValidationErrors, form])
 
@@ -130,6 +172,17 @@ export function StationaryAttackPage() {
     dispatch({ type: 'stopped', reason: '用户已停止' })
   }
 
+  const startNavigation = () => {
+    if (!selectedMap) return
+    setNavigationError(null)
+    postBridgeCommand({ command: 'startNavigation', packagePath: selectedMap })
+  }
+
+  const stopNavigation = () => {
+    postBridgeCommand({ command: 'stopNavigation' })
+    setNavigationRunning(false)
+  }
+
   return (
     <ConfigProvider
       theme={{
@@ -150,6 +203,13 @@ export function StationaryAttackPage() {
             <Typography.Text type="secondary">Windows x64 定点持续攻击配置</Typography.Text>
           </div>
           <div className="header-controls">
+            <Segmented
+              value={mode}
+              disabled={running || navigationRunning}
+              onChange={(value) => setMode(value as 'stationary' | 'navigation')}
+              options={[{ label: '定点攻击', value: 'stationary' }, { label: '自动寻路', value: 'navigation' }]}
+            />
+            {mode === 'stationary' && <>
             <Form form={form} component={false}>
               <RecognitionToggle />
             </Form>
@@ -163,6 +223,29 @@ export function StationaryAttackPage() {
                 command: 'openPreview',
                 recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),
               })}>打开实时预览</Button>
+              <Button
+                icon={<SafetyCertificateOutlined />}
+                title={visualConfigStatus === 'ready' ? '视觉安全区已配置' : '配置视觉安全区'}
+                onClick={() => postBridgeCommand({ command: 'openVisualStationarySetup' })}
+              >配置视觉安全区</Button>
+              <Tag color={visualConfigStatus === 'ready' ? 'success' : visualConfigStatus === 'viewportMismatch' ? 'warning' : 'default'}>
+                {visualConfigStatusLabel(visualConfigStatus)}
+              </Tag>
+              <Popconfirm
+                title="清空视觉配置？"
+                description="清空后需要重新框选平台和人物。"
+                okText="确定"
+                cancelText="取消"
+                disabled={visualConfigStatus !== 'ready' || running || navigationRunning}
+                onConfirm={() => postBridgeCommand({ command: 'clearVisualStationaryProfile' })}
+              >
+                <Button
+                  danger
+                  aria-label="清空视觉配置"
+                  icon={<DeleteOutlined />}
+                  disabled={visualConfigStatus !== 'ready' || running || navigationRunning}
+                >清空视觉配置</Button>
+              </Popconfirm>
               <Button icon={<SaveOutlined />} loading={saving} onClick={save}>保存配置</Button>
               {running ? (
                 <Button danger type="primary" icon={<StopOutlined />} onClick={stop}>停止</Button>
@@ -170,6 +253,7 @@ export function StationaryAttackPage() {
                 <Button type="primary" icon={<PlayCircleOutlined />} onClick={start}>开始</Button>
               )}
             </Space>
+            </>}
           </div>
         </header>
 
@@ -186,6 +270,7 @@ export function StationaryAttackPage() {
         {abnormalTermination && <Alert className="config-message" type="warning" showIcon title="异常终止记录" description={abnormalTermination} />}
 
         <div className="workspace-grid">
+          {mode === 'stationary' ? <>
           <Form
             form={form}
             layout="vertical"
@@ -230,7 +315,21 @@ export function StationaryAttackPage() {
             </Space>
           </Form>
 
-          <SessionStatusPanel state={session} recognition={recognition} />
+          <SessionStatusPanel state={session} recognition={recognition} visualSafety={visualSafety} />
+          </> : <>
+            <NavigationControls
+              directory={mapDirectory}
+              entries={mapEntries}
+              selected={selectedMap}
+              running={navigationRunning}
+              error={navigationError}
+              onChooseDirectory={() => postBridgeCommand({ command: 'chooseMapDirectory' })}
+              onSelect={setSelectedMap}
+              onStart={startNavigation}
+              onStop={stopNavigation}
+            />
+            <NavigationStatus state={navigationState} running={navigationRunning} />
+          </>}
         </div>
       </main>
       <Modal
@@ -275,6 +374,7 @@ function hostFieldPath(field: string): Array<string | number> {
     stabilize: ['stabilizeMinMs'],
     rest: ['restMinMs'],
   }
+
   return paths[field] ?? [field]
 }
 
@@ -284,6 +384,13 @@ function configWarningMessage(code: string): string {
     CONFIG_FILE_INVALID: '保存的配置未通过校验，已恢复安全默认值',
   }
   return warnings[code] ?? code
+}
+
+function visualConfigStatusLabel(status: string): string {
+  if (status === 'ready') return '视觉配置：可用'
+  if (status === 'viewportMismatch') return '视觉配置：画面尺寸已变化'
+  if (status === 'invalid') return '视觉配置：无效'
+  return '视觉配置：未配置'
 }
 
 function isConfigurationError(code: string | undefined): boolean {

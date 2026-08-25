@@ -9,6 +9,11 @@ describe('StationaryAttackPage', () => {
 
   beforeEach(() => {
     bridgeListener = undefined
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    })
     window.chrome = {
       webview: {
         postMessage: vi.fn(),
@@ -24,6 +29,103 @@ describe('StationaryAttackPage', () => {
     expect(screen.getByText('识别怪物后攻击')).toBeVisible()
     expect(screen.getByText('后续版本开放')).toBeVisible()
     expect(screen.getByRole('radio', { name: /识别怪物后攻击/ })).toBeDisabled()
+  })
+
+  it('offers visual-safe continuous mode and opens native setup without sending coordinates', async () => {
+    const user = userEvent.setup()
+    render(<StationaryAttackPage />)
+
+    const visualMode = screen.getByRole('radio', { name: /视觉增强持续攻击/ })
+    expect(visualMode).toBeEnabled()
+    await user.click(visualMode)
+    await user.click(screen.getByRole('button', { name: /配置视觉安全区/ }))
+
+    expect(vi.mocked(window.chrome!.webview!.postMessage)).toHaveBeenCalledWith({
+      command: 'openVisualStationarySetup',
+    })
+  })
+
+  it('clears a configured visual profile only after confirmation', async () => {
+    const user = userEvent.setup()
+    render(<StationaryAttackPage />)
+    act(() => bridgeListener?.(new MessageEvent('message', {
+      data: { type: 'visualStationary.config.updated', status: 'ready' },
+    })))
+
+    await user.click(screen.getByRole('button', { name: '清空视觉配置' }))
+    await user.click(await screen.findByRole('button', { name: /确\s*定/ }))
+
+    expect(vi.mocked(window.chrome!.webview!.postMessage)).toHaveBeenCalledWith({
+      command: 'clearVisualStationaryProfile',
+    })
+  })
+
+  it('shows a visual clear rejection without failing the active stationary session', () => {
+    render(<StationaryAttackPage />)
+    act(() => bridgeListener?.(new MessageEvent('message', {
+      data: { type: 'stationary.rhythm.updated', state: rhythmState(12, 'attack') },
+    })))
+
+    act(() => bridgeListener?.(new MessageEvent('message', {
+      data: { type: 'visualStationary.config.error', error: 'VISUAL_PROFILE_CLEAR_RUNNING' },
+    })))
+
+    expect(screen.getByText('运行中')).toBeVisible()
+    expect(screen.getByText('运行期间不能清空视觉配置')).toBeVisible()
+  })
+
+  it('shows structured visual safety and signed pixel offset from Host', () => {
+    render(<StationaryAttackPage />)
+
+    act(() => bridgeListener?.(new MessageEvent('message', {
+      data: {
+        type: 'visualStationary.state.updated',
+        state: {
+          schemaVersion: 1,
+          sessionId: 'visual-session',
+          cycleId: 2,
+          status: 'guardLeft',
+          frameSequence: 44,
+          bestScore: 0.98,
+          visualOffsetPx: -42,
+          guardWidthPx: 32,
+          code: 'VISUAL_GUARD_LEFT',
+          updatedAtMonoMs: 5000,
+          identityKind: 'CharacterAppearance',
+        },
+      },
+    })))
+
+    expect(screen.getByText('左侧保护区')).toBeVisible()
+    expect(screen.getByTestId('visual-offset')).toHaveTextContent('-42 px（左）')
+    expect(screen.getByText('人物外观')).toBeVisible()
+    expect(screen.getByText('人物匹配')).toBeVisible()
+    expect(screen.getByText('98%')).toBeVisible()
+  })
+
+  it('shows when visual protection has switched to continuous fallback', () => {
+    render(<StationaryAttackPage />)
+
+    act(() => bridgeListener?.(new MessageEvent('message', {
+      data: {
+        type: 'visualStationary.state.updated',
+        state: {
+          schemaVersion: 1,
+          sessionId: 'visual-session',
+          cycleId: 4,
+          status: 'FallbackContinuous',
+          frameSequence: 60,
+          bestScore: 0.45,
+          visualOffsetPx: null,
+          guardWidthPx: 48,
+          code: 'VISUAL_FALLBACK_CONTINUOUS',
+          updatedAtMonoMs: 20_000,
+          identityKind: 'CharacterAppearance',
+        },
+      },
+    })))
+
+    expect(screen.getByText('持续攻击回退')).toBeVisible()
   })
 
   it('keeps advanced debugging parameters collapsed by default', () => {
@@ -242,6 +344,44 @@ describe('StationaryAttackPage', () => {
     expect(screen.getByText('完成左右移动和稳定等待后才会进入下一轮攻击')).toBeVisible()
   })
 
+  it.each([
+    [-23, '-23 ms（左）'],
+    [17, '+17 ms（右）'],
+    [0, '0 ms（中心）'],
+  ] as const)('shows Host offset %s in role information without recognition', (relativeOffsetMs, expected) => {
+    render(<StationaryAttackPage />)
+
+    act(() => bridgeListener?.(new MessageEvent('message', {
+      data: {
+        type: 'stationary.rhythm.updated',
+        state: rhythmState(relativeOffsetMs),
+      },
+    })))
+
+    expect(screen.getByText('计算偏移')).toBeVisible()
+    expect(screen.getByTestId('relative-offset')).toHaveTextContent(expected)
+  })
+
+  it('retains final stopped offset and clears it when a new session starts', async () => {
+    const user = userEvent.setup()
+    render(<StationaryAttackPage />)
+
+    act(() => bridgeListener?.(new MessageEvent('message', {
+      data: {
+        type: 'stationary.stopped',
+        reason: 'HOST_STOPPED',
+        state: rhythmState(-17, 'stopped'),
+      },
+    })))
+
+    expect(screen.getByTestId('relative-offset')).toHaveTextContent('-17 ms（左）')
+
+    await user.click(screen.getByRole('button', { name: /开始/ }))
+    await user.click(await screen.findByRole('button', { name: '人物当前朝向右' }))
+
+    expect(screen.getByTestId('relative-offset')).toHaveTextContent('0 ms（中心）')
+  })
+
   it('asks for the current facing before starting and cancel sends no start intent', async () => {
     const user = userEvent.setup()
     render(<StationaryAttackPage />)
@@ -272,3 +412,19 @@ describe('StationaryAttackPage', () => {
     }))
   })
 })
+
+function rhythmState(relativeOffsetMs: number, phase = 'moveGap') {
+  return {
+    schemaVersion: 1,
+    sessionId: 'session-offset',
+    cycleId: 3,
+    phase,
+    sampledDurationMs: 1_000,
+    phaseStartedMonoMs: 2_000,
+    phaseDeadlineMonoMs: phase === 'stopped' ? 2_000 : 2_100,
+    remainingMs: phase === 'stopped' ? 0 : 100,
+    updatedAtMonoMs: 2_000,
+    earlyReleaseReason: null,
+    relativeOffsetMs,
+  }
+}

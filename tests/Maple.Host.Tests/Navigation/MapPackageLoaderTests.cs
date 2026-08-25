@@ -10,13 +10,26 @@ public sealed class MapPackageLoaderTests
     public async Task Loads_navigation_minimap_metadata()
     {
         await using MemoryStream package = CreatePackage(
-            manifest: "{\"format\":\"madudu_map_package\",\"version\":1,\"map_name\":\"Swamp\",\"minimap_rect\":[5,103,223,72],\"minimap_rect_source\":\"manual\"}",
+            manifest: "{\"format\":\"madudu_map_package\",\"version\":1,\"app_version\":\"1.0.0\",\"map_name\":\"Swamp\",\"minimap_rect\":[5,103,223,72],\"minimap_rect_source\":\"manual\"}",
             map: "{\"platforms\":[]}");
 
         MapPackageSnapshot snapshot = await MapPackageLoader.LoadAsync(package);
 
         Assert.Equal(new MapMinimapRect(5, 103, 223, 72), snapshot.MinimapRect);
         Assert.Equal("manual", snapshot.MinimapRectSource);
+        Assert.Equal(32, snapshot.MinimapReferenceTopInset);
+    }
+
+    [Fact]
+    public async Task Keeps_client_relative_package_without_legacy_window_inset()
+    {
+        await using MemoryStream package = CreatePackage(
+            manifest: "{\"format\":\"madudu_map_package\",\"version\":1,\"minimap_rect\":[5,71,223,72]}",
+            map: "{\"platforms\":[]}");
+
+        MapPackageSnapshot snapshot = await MapPackageLoader.LoadAsync(package);
+
+        Assert.Equal(0, snapshot.MinimapReferenceTopInset);
     }
 
     [Theory]

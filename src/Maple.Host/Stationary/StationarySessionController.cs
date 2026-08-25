@@ -15,9 +15,11 @@ public sealed class StationarySessionController(
     StationaryMovementPlanner movementPlanner,
     IAttackTriggerStrategy trigger,
     IRandomSource random,
-    IStationaryStatePublisher publisher)
+    IStationaryStatePublisher publisher,
+    IStationaryMovementTelemetrySink? movementTelemetry = null)
 {
     private const int AttackReleaseSettleMs = 100;
+    private const int DirectionReleaseSettleMs = 100;
 
     public async Task RunAsync(
         Guid sessionId,
@@ -37,6 +39,7 @@ public sealed class StationarySessionController(
                 StationaryAttackConfig config = configs.GetValidatedSnapshot();
                 ConfigValidationResult validation = StationaryConfigValidator.Validate(config);
                 if (!validation.IsValid) throw new SessionStopException("CONFIG_INVALID");
+                movementPlanner.ValidateCurrentOffset(config.MaxLateralMoveMs);
                 AttackTriggerDecision decision = trigger.ShouldAttack(ObservationContext.Empty);
                 if (!decision.ShouldAttack) throw new SessionStopException(decision.Code);
 
@@ -59,26 +62,80 @@ public sealed class StationarySessionController(
                     attack.DurationMs,
                     cancellationToken);
 
-                MovementPlan movement = movementPlanner.CreatePlan(config);
-                await HoldAsync(
-                    sessionId,
-                    cycleId,
-                    StationaryPhase.MoveFirst,
-                    ToInputAction(movement.First.Direction),
-                    movement.First.HoldMs,
-                    attack.DurationMs,
-                    cancellationToken);
-                await DelayPhaseAsync(sessionId, cycleId, StationaryPhase.MoveGap, movement.GapMs, attack.DurationMs, cancellationToken);
-                await HoldAsync(
-                    sessionId,
-                    cycleId,
-                    StationaryPhase.MoveSecond,
-                    ToInputAction(movement.Second.Direction),
-                    movement.Second.HoldMs,
-                    attack.DurationMs,
-                    cancellationToken);
-                movementPlanner.ApplyCompletedPlan(movement);
-                await DelayPhaseAsync(sessionId, cycleId, StationaryPhase.Stabilizing, movement.StabilizeMs, attack.DurationMs, cancellationToken);
+                MovementCycle movement = movementPlanner.BeginCycle(config);
+                MovementSegment? first = movementPlanner.TryCreateFirstSegment(config, movement);
+                if (first is null)
+                {
+                    MovementSegment? recovery = movementPlanner.TryCreateRecoverySegment(config);
+                    if (recovery is null)
+                    {
+                        Publish(
+                            sessionId,
+                            cycleId,
+                            StationaryPhase.MoveSecond,
+                            0,
+                            attack.DurationMs,
+                            "MOVEMENT_FROZEN_NO_SAFE_RECOVERY");
+                    }
+                    else
+                    {
+                        await HoldAsync(
+                            sessionId,
+                            cycleId,
+                            StationaryPhase.MoveSecond,
+                            ToInputAction(recovery.Direction),
+                            recovery.HoldMs,
+                            attack.DurationMs,
+                            cancellationToken,
+                            released => ApplyMovementResultAsync(
+                                sessionId,
+                                cycleId,
+                                MovementIntent.RecoveryTowardCenter,
+                                recovery,
+                                released,
+                                config));
+                    }
+                }
+                else
+                {
+                    await HoldAsync(
+                        sessionId,
+                        cycleId,
+                        StationaryPhase.MoveFirst,
+                        ToInputAction(first.Direction),
+                        first.HoldMs,
+                        attack.DurationMs,
+                        cancellationToken,
+                        released => ApplyMovementResultAsync(
+                            sessionId,
+                            cycleId,
+                            movement.Intent,
+                            first,
+                            released,
+                            config));
+                    int gapMs = checked(
+                        DirectionReleaseSettleMs + movementPlanner.SampleGapMs(config));
+                    await DelayPhaseAsync(sessionId, cycleId, StationaryPhase.MoveGap, gapMs, attack.DurationMs, cancellationToken);
+                    MovementSegment second = movementPlanner.CreateSecondSegment(config, movement);
+                    await HoldAsync(
+                        sessionId,
+                        cycleId,
+                        StationaryPhase.MoveSecond,
+                        ToInputAction(second.Direction),
+                        second.HoldMs,
+                        attack.DurationMs,
+                        cancellationToken,
+                        released => ApplyMovementResultAsync(
+                            sessionId,
+                            cycleId,
+                            movement.Intent,
+                            second,
+                            released,
+                            config));
+                    movementPlanner.CompleteCycle(config, movement);
+                }
+                int stabilizeMs = movementPlanner.SampleStabilizeMs(config);
+                await DelayPhaseAsync(sessionId, cycleId, StationaryPhase.Stabilizing, stabilizeMs, attack.DurationMs, cancellationToken);
 
                 if (config.RestEnabled && random.NextInclusive(1, 100) <= config.RestProbabilityPercent)
                 {
@@ -95,8 +152,7 @@ public sealed class StationarySessionController(
         {
             stopReason = exception.Code;
         }
-        catch (InvalidOperationException exception) when (
-            exception.Message.EndsWith("BUDGET_EXHAUSTED", StringComparison.Ordinal))
+        catch (InvalidOperationException exception) when (IsMovementStopCode(exception.Message))
         {
             stopReason = exception.Message;
         }
@@ -112,14 +168,15 @@ public sealed class StationarySessionController(
         }
     }
 
-    private async Task HoldAsync(
+    private async Task<InputActionResult> HoldAsync(
         Guid sessionId,
         long cycleId,
         StationaryPhase phase,
         StationaryInputAction action,
         int holdMs,
         int sampledAttackDurationMs,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<InputActionResult, Task>? onReleased = null)
     {
         SafetyCheckResult gate = await safety.CheckAsync(cancellationToken);
         if (!gate.Success) throw new SessionStopException(gate.Code);
@@ -128,14 +185,51 @@ public sealed class StationarySessionController(
         InputActionResult down = await actions.KeyDownAsync(action, holdMs, cancellationToken);
         if (!down.Success) throw new SessionStopException(down.Code);
 
+        InputActionResult? up = null;
         try
         {
             await DelayWithSafetyChecksAsync(holdMs, cancellationToken);
         }
         finally
         {
-            InputActionResult up = await actions.KeyUpAsync(action, CancellationToken.None);
+            up = await actions.KeyUpAsync(action, CancellationToken.None);
             if (!up.Success) throw new SessionStopException(up.Code);
+            if (onReleased is not null) await onReleased(up);
+        }
+        return up!;
+    }
+
+    private async Task ApplyMovementResultAsync(
+        Guid sessionId,
+        long cycleId,
+        MovementIntent intent,
+        MovementSegment segment,
+        InputActionResult result,
+        StationaryAttackConfig config)
+    {
+        if (result.ActualHoldMs is not >= 1 or > StationaryAttackConfig.MovementDurationLimitMs ||
+            result.ReleaseLatenessMs is null or < 0)
+            throw new SessionStopException("MOVEMENT_TIMING_INVALID");
+        int offsetBefore = movementPlanner.RelativeOffsetMs;
+        movementPlanner.ApplyCompletedSegment(
+            segment.Direction,
+            result.ActualHoldMs.Value,
+            config.MaxLateralMoveMs);
+        if (movementTelemetry is not null)
+        {
+            await movementTelemetry.WriteAsync(
+                new StationaryMovementTelemetry(
+                    sessionId,
+                    cycleId,
+                    segment.Direction,
+                    intent,
+                    segment.HoldMs,
+                    result.ActualHoldMs.Value,
+                    result.ReleaseLatenessMs.Value,
+                    offsetBefore,
+                    movementPlanner.RelativeOffsetMs,
+                    config.MaxLateralMoveMs),
+                CancellationToken.None);
         }
     }
 
@@ -185,11 +279,16 @@ public sealed class StationarySessionController(
             start + durationMs,
             durationMs,
             start,
-            earlyReleaseReason));
+            earlyReleaseReason,
+            movementPlanner.RelativeOffsetMs));
     }
 
     private static StationaryInputAction ToInputAction(MovementDirection direction) =>
         direction == MovementDirection.Left ? StationaryInputAction.MoveLeft : StationaryInputAction.MoveRight;
+
+    private static bool IsMovementStopCode(string code) =>
+        code.EndsWith("BUDGET_EXHAUSTED", StringComparison.Ordinal) ||
+        code is "MOVEMENT_OFFSET_EXCEEDED" or "MOVEMENT_RETURN_UNSATISFIED";
 
     private sealed class SessionStopException(string code) : Exception(code)
     {

@@ -10,7 +10,15 @@ public sealed record SessionLogEntry(
     string Event,
     string ResultCode,
     string? TargetIdentity = null,
-    long BrokerSequence = 0)
+    long BrokerSequence = 0,
+    string? Direction = null,
+    string? MovementIntent = null,
+    int? RequestedHoldMs = null,
+    int? ActualHoldMs = null,
+    int? ReleaseLatenessMs = null,
+    int? OffsetBeforeMs = null,
+    int? OffsetAfterMs = null,
+    int? MaxLateralMoveMs = null)
 {
     public static SessionLogEntry Create(
         Guid sessionId,

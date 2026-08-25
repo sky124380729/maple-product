@@ -6,6 +6,7 @@ using System.Windows.Media.Imaging;
 using Maple.Host.Navigation;
 using Maple.Host.Preview;
 using Maple.Host.Recognition;
+using Maple.Host.Stationary;
 using WpfImage = System.Windows.Controls.Image;
 using WpfButton = System.Windows.Controls.Button;
 
@@ -18,6 +19,8 @@ public sealed class PreviewWindowHost : IAsyncDisposable
     private TextBlock? diagnostics;
     private TextBlock? recordingStatus;
     private WpfButton? recordButton;
+    private WpfButton? visualSetupButton;
+    private WpfButton? clearVisualButton;
     private Canvas? overlay;
     private PreviewSession? session;
     private RecognitionSession? recognition;
@@ -31,11 +34,31 @@ public sealed class PreviewWindowHost : IAsyncDisposable
     private int lastFrameWidth;
     private int lastFrameHeight;
     private bool recognitionRequested;
+    private CapturedFrame? latestFrame;
+    private VisualStationarySetupController? visualSetup;
+    private VisualStationaryObservationSession? visualObservation;
+    private readonly object frameConsumersSync = new();
+    private readonly List<Action<CapturedFrame>> frameConsumers = [];
+    private readonly VisualStationaryProfileStore visualProfileStore = new(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "MapleProduct",
+        "visual-stationary"));
     private readonly SemaphoreSlim recordingGate = new(1, 1);
     private int recordingStopPending;
+    private int visualProfileLoadStarted;
+    private int visualProfileMutationActive;
 
     public event Action<PreviewFault>? Faulted;
+    public event Action? Closed;
     public event Action<RecognitionSnapshot>? RecognitionSnapshotPublished;
+    public event Action<VisualStationaryProfile>? VisualProfileUpdated;
+    public event Action<string>? VisualProfileStatusChanged;
+
+    public VisualStationaryProfile? CurrentVisualProfile => visualSetup?.CurrentProfile;
+    public VisualStationaryObservationSession? CurrentVisualObservation => Volatile.Read(ref visualObservation);
+    public bool IsVisualSetupActive => visualSetup?.IsActive == true;
+    public bool IsVisualProfileMutationActive => Volatile.Read(ref visualProfileMutationActive) != 0;
+    public Func<bool> CanClearVisualProfile { get; set; } = static () => true;
 
     public void Show() => _ = ShowAsync(0, CancellationToken.None);
 
@@ -72,13 +95,36 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             Margin = new Thickness(12, 5, 0, 5)
         };
         recordButton.Click += OnRecordClicked;
-        overlay = new Canvas { IsHitTestVisible = false };
+        visualSetupButton = new WpfButton
+        {
+            Content = "配置视觉安全区",
+            ToolTip = "框选平台范围和自己的角色外观",
+            Padding = new Thickness(12, 5, 12, 5),
+            Margin = new Thickness(8, 5, 0, 5)
+        };
+        visualSetupButton.Click += OnVisualSetupClicked;
+        clearVisualButton = new WpfButton
+        {
+            Content = "清除视觉配置",
+            ToolTip = "删除平台范围和人物外观模板",
+            Foreground = System.Windows.Media.Brushes.IndianRed,
+            Padding = new Thickness(12, 5, 12, 5),
+            Margin = new Thickness(8, 5, 0, 5)
+        };
+        clearVisualButton.Click += OnClearVisualClicked;
+        overlay = new Canvas
+        {
+            IsHitTestVisible = false,
+            Background = System.Windows.Media.Brushes.Transparent
+        };
         var grid = new Grid();
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition());
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         var toolbar = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
         toolbar.Children.Add(recordButton);
+        toolbar.Children.Add(visualSetupButton);
+        toolbar.Children.Add(clearVisualButton);
         toolbar.Children.Add(recordingStatus);
         grid.Children.Add(toolbar);
         var imageLayer = new Grid();
@@ -105,6 +151,15 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             Content = grid
         };
         window.Closed += OnClosed;
+        window.PreviewKeyDown += OnPreviewKeyDown;
+        visualSetup = new VisualStationarySetupController(
+            overlay,
+            image,
+            visualProfileStore,
+            () => latestFrame,
+            value => { if (recordingStatus is not null) recordingStatus.Text = value; },
+            status => VisualProfileStatusChanged?.Invoke(status),
+            SetVisualProfile);
         session = new PreviewSession(new WindowsGraphicsCaptureSource());
         recognition = new RecognitionSession(RecognitionProviderFactory.Create());
         recognitionRequested = recognitionEnabled;
@@ -135,6 +190,30 @@ public sealed class PreviewWindowHost : IAsyncDisposable
 
     private void OnFrameArrived(CapturedFrame frame)
     {
+        latestFrame = frame;
+        if (Interlocked.CompareExchange(ref visualProfileLoadStarted, 1, 0) == 0 && visualSetup is not null)
+            window?.Dispatcher.BeginInvoke(() => LoadVisualProfileOnUiThreadAsync(frame.Width, frame.Height));
+        try
+        {
+            Volatile.Read(ref visualObservation)?.PushFrame(frame);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            OnFaulted(new PreviewFault("VISUAL_OBSERVER_FAILED:" + exception.GetType().Name));
+        }
+        VisualStationaryObservation? observed = Volatile.Read(ref visualObservation)?.Latest;
+        VisualStationaryObservation? frameVisualObservation =
+            observed?.FrameSequence == frame.Sequence ? observed : null;
+        Action<CapturedFrame>[] consumers;
+        lock (frameConsumersSync) consumers = [.. frameConsumers];
+        foreach (Action<CapturedFrame> consumer in consumers)
+        {
+            try { consumer(frame); }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                Faulted?.Invoke(new PreviewFault("VISUAL_OBSERVER_FAILED:" + exception.GetType().Name));
+            }
+        }
         if (window is null) return;
         if (Interlocked.Exchange(ref renderPending, 1) != 0) return;
         window.Dispatcher.BeginInvoke(() =>
@@ -142,13 +221,16 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             try
             {
                 if (window is null || image is null || diagnostics is null) return;
-                var bitmap = new WriteableBitmap(frame.Width, frame.Height, 96, 96, PixelFormats.Bgra32, null);
-                bitmap.WritePixels(
-                    new Int32Rect(0, 0, frame.Width, frame.Height),
-                    frame.BgraPixels.ToArray(),
-                    frame.Stride,
-                    0);
-                image.Source = bitmap;
+                if (visualSetup?.IsActive != true)
+                {
+                    var bitmap = new WriteableBitmap(frame.Width, frame.Height, 96, 96, PixelFormats.Bgra32, null);
+                    bitmap.WritePixels(
+                        new Int32Rect(0, 0, frame.Width, frame.Height),
+                        frame.BgraPixels.ToArray(),
+                        frame.Stride,
+                        0);
+                    image.Source = bitmap;
+                }
                 lastFrameWidth = frame.Width;
                 lastFrameHeight = frame.Height;
                 recognition?.PushFrame(frame);
@@ -165,7 +247,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
                     if (!status.IsRecording && status.StopReason is not null)
                         RequestRecordingStop(status.StopReason);
                 }
-                RenderRecognitionOverlay();
+                RenderRecognitionOverlay(frameVisualObservation, useVisualSnapshot: true);
 
                 if (firstFrameAtMonoMs == 0) firstFrameAtMonoMs = frame.CapturedAtMonoMs;
                 if (lastSequence > 0 && frame.Sequence > lastSequence + 1)
@@ -179,7 +261,11 @@ public sealed class PreviewWindowHost : IAsyncDisposable
                 string recognitionText = recognized is null
                     ? "识别未开启"
                     : $"识别 {recognized.Health}   人物 {(recognized.Self is null ? 0 : 1)}   怪物 {recognized.Monsters.Count}";
-                diagnostics.Text = $"FPS {fps:F1}   Frame age {age}ms   Dropped {droppedFrames}   {recognitionText}";
+                VisualStationaryObservation? visual = frameVisualObservation;
+                string visualText = visual is null
+                    ? "视觉本人未配置"
+                    : $"视觉本人 {(visual.IdentityTrusted ? "可信" : "候选")} {visual.Platform.BestScore:P0}";
+                diagnostics.Text = $"FPS {fps:F1}   Frame age {age}ms   Dropped {droppedFrames}   {recognitionText}   {visualText}";
             }
             finally { Volatile.Write(ref renderPending, 0); }
         });
@@ -187,6 +273,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
 
     private void OnFaulted(PreviewFault fault)
     {
+        Volatile.Read(ref visualObservation)?.MarkUntrusted(fault.Code);
         window?.Dispatcher.BeginInvoke(() =>
         {
             if (diagnostics is not null) diagnostics.Text = fault.Code;
@@ -195,10 +282,120 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         Faulted?.Invoke(fault);
     }
 
+    private async void LoadVisualProfileOnUiThreadAsync(int frameWidth, int frameHeight)
+    {
+        VisualStationarySetupController? setup = visualSetup;
+        if (setup is null) return;
+        try
+        {
+            await setup.LoadAsync(frameWidth, frameHeight);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            if (recordingStatus is not null)
+                recordingStatus.Text = "视觉配置加载失败：" + exception.GetType().Name;
+            VisualProfileStatusChanged?.Invoke("invalid");
+        }
+    }
+
     private async void OnClosed(object? sender, EventArgs eventArgs)
     {
+        visualSetup?.Cancel();
+        Volatile.Read(ref visualObservation)?.MarkUntrusted("PREVIEW_CLOSED");
         window = null;
+        Closed?.Invoke();
         await DisposeSessionAsync();
+    }
+
+    public IDisposable RegisterFrameConsumer(Action<CapturedFrame> consumer)
+    {
+        ArgumentNullException.ThrowIfNull(consumer);
+        lock (frameConsumersSync) frameConsumers.Add(consumer);
+        return new FrameConsumerSubscription(this, consumer);
+    }
+
+    public void BeginVisualSetup()
+    {
+        if (window is null || visualSetup is null) return;
+        if (!CanClearVisualProfile())
+        {
+            if (recordingStatus is not null) recordingStatus.Text = "攻击或寻路运行中不能修改视觉配置";
+            return;
+        }
+        window.Dispatcher.Invoke(() => visualSetup.Begin());
+    }
+
+    public async Task<VisualProfileDeleteResult> ClearVisualProfileAsync(CancellationToken cancellationToken)
+    {
+        if (Interlocked.CompareExchange(ref visualProfileMutationActive, 1, 0) != 0)
+            return new VisualProfileDeleteResult(false, "VISUAL_PROFILE_MUTATION_BUSY");
+        try
+        {
+            if (!CanClearVisualProfile())
+                return new VisualProfileDeleteResult(false, "VISUAL_PROFILE_CLEAR_RUNNING");
+            VisualProfileDeleteResult result = await visualProfileStore.DeleteAsync(cancellationToken);
+            if (!result.Success) return result;
+            Volatile.Write(ref visualObservation, null);
+            if (visualSetup is not null) visualSetup.ClearProfile();
+            else VisualProfileStatusChanged?.Invoke("notConfigured");
+            return result;
+        }
+        finally
+        {
+            Volatile.Write(ref visualProfileMutationActive, 0);
+        }
+    }
+
+    private void OnVisualSetupClicked(object? sender, RoutedEventArgs eventArgs)
+    {
+        if (visualSetup?.IsActive == true) visualSetup.Cancel();
+        else BeginVisualSetup();
+    }
+
+    private async void OnClearVisualClicked(object? sender, RoutedEventArgs eventArgs)
+    {
+        if (!CanClearVisualProfile())
+        {
+            if (recordingStatus is not null) recordingStatus.Text = "攻击或寻路运行中不能清除视觉配置";
+            return;
+        }
+        try
+        {
+            if (clearVisualButton is not null) clearVisualButton.IsEnabled = false;
+            VisualProfileDeleteResult result = await ClearVisualProfileAsync(CancellationToken.None);
+            if (!result.Success && recordingStatus is not null)
+                recordingStatus.Text = "清除视觉配置失败：" + result.Code;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            if (recordingStatus is not null)
+                recordingStatus.Text = "清除视觉配置失败：" + exception.GetType().Name;
+        }
+        finally
+        {
+            if (clearVisualButton is not null) clearVisualButton.IsEnabled = true;
+        }
+    }
+
+    public VisualStationaryObservationSession ResetVisualObservation(VisualStationaryProfile profile)
+    {
+        var created = new VisualStationaryObservationSession(profile);
+        Volatile.Write(ref visualObservation, created);
+        window?.Dispatcher.BeginInvoke(() => RenderRecognitionOverlay());
+        return created;
+    }
+
+    private void SetVisualProfile(VisualStationaryProfile profile)
+    {
+        ResetVisualObservation(profile);
+        VisualProfileUpdated?.Invoke(profile);
+    }
+
+    private void OnPreviewKeyDown(object? sender, System.Windows.Input.KeyEventArgs eventArgs)
+    {
+        if (eventArgs.Key != System.Windows.Input.Key.Escape || visualSetup?.IsActive != true) return;
+        visualSetup.Cancel();
+        eventArgs.Handled = true;
     }
 
     private MapRecorder? recorder;
@@ -317,12 +514,19 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         diagnostics = null;
         recordingStatus = null;
         recordButton = null;
+        visualSetupButton = null;
+        clearVisualButton = null;
+        visualSetup = null;
+        Volatile.Write(ref visualObservation, null);
+        latestFrame = null;
         firstFrameAtMonoMs = 0;
         lastSequence = 0;
         displayedFrames = 0;
         droppedFrames = 0;
         renderPending = 0;
         latestRecognition = null;
+        visualProfileLoadStarted = 0;
+        visualProfileMutationActive = 0;
         lastFrameWidth = 0;
         lastFrameHeight = 0;
     }
@@ -385,19 +589,23 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         return new MapLocalObservation(recognized.Geometry, self, recognized.FrameSequence);
     }
 
-    private void RenderRecognitionOverlay()
+    private void RenderRecognitionOverlay(
+        VisualStationaryObservation? visualObservationSnapshot = null,
+        bool useVisualSnapshot = false)
     {
-        if (overlay is null || latestRecognition is null) return;
+        if (overlay is null) return;
         double viewportWidth = overlay.ActualWidth > 0 ? overlay.ActualWidth : image?.ActualWidth ?? 0;
         double viewportHeight = overlay.ActualHeight > 0 ? overlay.ActualHeight : image?.ActualHeight ?? 0;
         if (viewportWidth <= 0 || viewportHeight <= 0) return;
         overlay.Children.Clear();
-        IReadOnlyList<RecognitionOverlayBox> boxes = RecognitionOverlayLayout.Create(
-            latestRecognition,
-            lastFrameWidth,
-            lastFrameHeight,
-            viewportWidth,
-            viewportHeight);
+        IReadOnlyList<RecognitionOverlayBox> boxes = latestRecognition is null
+            ? []
+            : RecognitionOverlayLayout.Create(
+                latestRecognition,
+                lastFrameWidth,
+                lastFrameHeight,
+                viewportWidth,
+                viewportHeight);
         foreach (RecognitionOverlayBox target in boxes)
         {
             var box = new Border
@@ -418,6 +626,26 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             Canvas.SetLeft(box, target.X);
             Canvas.SetTop(box, target.Y);
             overlay.Children.Add(box);
+        }
+        visualSetup?.RenderOverlay(useVisualSnapshot
+            ? visualObservationSnapshot
+            : Volatile.Read(ref visualObservation)?.Latest);
+    }
+
+    private void RemoveFrameConsumer(Action<CapturedFrame> consumer)
+    {
+        lock (frameConsumersSync) frameConsumers.Remove(consumer);
+    }
+
+    private sealed class FrameConsumerSubscription(
+        PreviewWindowHost owner,
+        Action<CapturedFrame> consumer) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0) owner.RemoveFrameConsumer(consumer);
         }
     }
 }

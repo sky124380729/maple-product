@@ -17,6 +17,10 @@ button, input { font: inherit; }
 .header-controls { display: grid; justify-items: end; gap: 10px; }
 .header-controls .recognition-toggle { margin: 0; padding: 0; border: 0; background: transparent; }
 .header-controls .recognition-toggle .ant-typography { max-width: 300px; }
+.navigation-fields { width: 100%; margin-top: 24px; }
+.navigation-fields .ant-select, .navigation-fields .ant-btn { width: 100%; }
+.navigation-controls { min-height: 360px; }
+.navigation-status .ant-descriptions-item-label { width: 104px; color: #777f7d; }
 .safety-notice { margin-bottom: 16px; }
 .config-message { margin-bottom: 16px; }
 
@@ -51,10 +55,14 @@ button, input { font: inherit; }
 .countdown-block .ant-statistic-content { color: #0f6158; font-family: "Cascadia Mono", Consolas, monospace; font-size: 38px; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .session-details { margin-bottom: 20px; }
 .recognition-status { margin: 0 0 20px; padding: 14px; border: 1px solid #d8dfdd; border-radius: 8px; background: #fff; }
-.recognition-status-heading, .identity-row, .resource-copy, .recognition-meta { display: flex; align-items: center; gap: 10px; }
+.visual-safety-status { margin: 0; padding: 14px; border: 1px solid #d8dfdd; border-radius: 8px; background: #fff; }
+.visual-safety-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.visual-safety-heading h4.ant-typography { margin: 0; font-size: 15px; }
+.recognition-status-heading, .identity-row, .recognition-offset-row, .resource-copy, .recognition-meta { display: flex; align-items: center; gap: 10px; }
 .recognition-status-heading { justify-content: space-between; margin-bottom: 12px; }
 .recognition-status-heading h4.ant-typography { margin: 0; font-size: 15px; }
 .identity-row { flex-wrap: wrap; margin-bottom: 12px; }
+.recognition-offset-row { justify-content: space-between; min-width: 0; margin-bottom: 12px; }
 .resource-row { margin-top: 8px; }
 .resource-copy { justify-content: space-between; margin-bottom: 2px; }
 .recognition-meta { flex-wrap: wrap; justify-content: space-between; margin-top: 12px; font-size: 12px; }

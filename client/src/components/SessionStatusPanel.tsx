@@ -1,7 +1,8 @@
 import { Alert, Descriptions, Statistic, Tag, Typography } from 'antd'
 import type { SessionState } from '../state/sessionReducer'
-import type { RecognitionSnapshotView } from '../bridge/types'
+import type { RecognitionSnapshotView, VisualStationaryStateView } from '../bridge/types'
 import { RecognitionStatus } from './RecognitionStatus'
+import { VisualSafetyStatus } from './VisualSafetyStatus'
 import { formatDurationSeconds, useRhythmCountdown } from '../hooks/useRhythmCountdown'
 
 const phaseLabels: Record<string, string> = {
@@ -29,9 +30,11 @@ const nextPhaseLabels: Record<string, string> = {
 export function SessionStatusPanel({
   state,
   recognition,
+  visualSafety,
 }: {
   state: SessionState
   recognition: RecognitionSnapshotView | null
+  visualSafety: VisualStationaryStateView | null
 }) {
   const remainingMs = useRhythmCountdown(state.rhythm)
   const phase = state.rhythm?.phase ?? 'idle'
@@ -72,7 +75,13 @@ export function SessionStatusPanel({
         <Descriptions.Item label="输入状态">{active ? 'Broker 已租约保护' : '未发送输入'}</Descriptions.Item>
       </Descriptions>
 
-      <RecognitionStatus snapshot={recognition} />
+      <RecognitionStatus
+        snapshot={recognition}
+        relativeOffsetMs={state.status === 'locating' || state.status === 'arming'
+          ? 0
+          : state.rhythm?.relativeOffsetMs ?? null}
+      />
+      <VisualSafetyStatus state={visualSafety} />
 
     </section>
   )

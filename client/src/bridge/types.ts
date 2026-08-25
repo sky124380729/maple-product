@@ -19,6 +19,7 @@ export interface StationaryRhythmState {
   phaseDeadlineMonoMs: number
   remainingMs: number
   updatedAtMonoMs: number
+  relativeOffsetMs: number
   earlyReleaseReason: string | null
 }
 
@@ -46,7 +47,7 @@ export interface StationaryAttackConfig {
   restProbabilityPercent: number
   restMinMs: number
   restMaxMs: number
-  attackTriggerMode: 'always' | 'monsterInRange'
+  attackTriggerMode: 'always' | 'visualSafeContinuous' | 'monsterInRange'
   recognitionEnabled: boolean
 }
 
@@ -96,4 +97,18 @@ export interface RecognitionSnapshotView {
   frameAgeMs: number
   faultCode: string | null
   hud: RecognitionHudSnapshot
+}
+
+export interface VisualStationaryStateView {
+  schemaVersion: number
+  sessionId: string
+  cycleId: number
+  status: string
+  frameSequence: number
+  bestScore: number
+  visualOffsetPx: number | null
+  guardWidthPx: number
+  code: string
+  updatedAtMonoMs: number
+  identityKind: 'NameTemplate' | 'CharacterAppearance'
 }

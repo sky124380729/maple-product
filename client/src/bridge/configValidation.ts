@@ -1,5 +1,8 @@
 import type { StationaryAttackConfig } from './types'
 
+const movementDurationLimitMs = 5_000
+const releaseSafetyMarginMs = 20
+
 export type ConfigFieldPath = Array<string | number>
 
 export interface ConfigValidationError {
@@ -17,7 +20,7 @@ export function validateStationaryConfig(config: StationaryAttackConfig): Config
   const errors: ConfigValidationError[] = []
   const add = (name: ConfigFieldPath, code: string, message: string) => errors.push({ name, code, message })
 
-  if (config.attackTriggerMode !== 'always') {
+  if (config.attackTriggerMode === 'monsterInRange') {
     add(['attackTriggerMode'], 'ATTACK_TRIGGER_DISABLED', '识别怪物后攻击尚未开放')
   }
   if (!Array.isArray(config.attackBands) || config.attackBands.length !== 4) {
@@ -43,6 +46,9 @@ export function validateStationaryConfig(config: StationaryAttackConfig): Config
   if (weightTotal !== 100) add(['attackBands'], 'ATTACK_WEIGHT_TOTAL', '四段权重总和必须为 100%')
 
   validatePositiveRange(config.moveHoldMinMs, config.moveHoldMaxMs, ['moveHoldMinMs', 'moveHoldMaxMs'], '移动按压')
+  if (Number.isFinite(config.moveHoldMaxMs) && config.moveHoldMaxMs > movementDurationLimitMs) {
+    add(['moveHoldMaxMs'], 'MOVE_HOLD_LIMIT', '移动按压最大值不能超过 5000 ms')
+  }
   validatePositiveRange(config.moveGapMinMs, config.moveGapMaxMs, ['moveGapMinMs', 'moveGapMaxMs'], '无按键间隔')
   validatePositiveRange(config.stabilizeMinMs, config.stabilizeMaxMs, ['stabilizeMinMs', 'stabilizeMaxMs'], '稳定等待')
   validatePositiveRange(config.restMinMs, config.restMaxMs, ['restMinMs', 'restMaxMs'], '休息')
@@ -50,9 +56,9 @@ export function validateStationaryConfig(config: StationaryAttackConfig): Config
   const lateral = numberOrNaN(config.maxLateralMoveMs)
   const holdMin = numberOrNaN(config.moveHoldMinMs)
   if (!Number.isFinite(lateral) || lateral <= 0) add(['maxLateralMoveMs'], 'MAX_LATERAL_MOVE_INVALID', '必须为正数')
-  if (Number.isFinite(lateral) && Number.isFinite(holdMin) && lateral < holdMin) {
-    add(['maxLateralMoveMs'], 'MOVE_BUDGET_TOO_SMALL', '每侧最大累计偏移不能小于移动按压最小值')
-    add(['moveHoldMinMs'], 'MOVE_BUDGET_TOO_SMALL', '不能大于每侧最大累计偏移')
+  if (Number.isFinite(lateral) && Number.isFinite(holdMin) && lateral < holdMin + releaseSafetyMarginMs) {
+    add(['maxLateralMoveMs'], 'MOVE_BUDGET_TOO_SMALL', '每侧最大累计偏移至少要比移动按压最小值多 20 ms')
+    add(['moveHoldMinMs'], 'MOVE_BUDGET_TOO_SMALL', '移动按压最小值加 20 ms 后不能超过每侧最大累计偏移')
   }
   const probability = numberOrNaN(config.restProbabilityPercent)
   if (!Number.isFinite(probability) || probability < 0 || probability > 100) {
@@ -95,7 +101,17 @@ export function hostErrorMessage(code: string): string {
     BROKER_HEARTBEAT_IO: '输入服务心跳失败，已安全停止输入；请重新开始',
     ATTACK_WEIGHT_TOTAL: '四段攻击权重总和必须为 100%',
     ATTACK_TRIGGER_DISABLED: '识别怪物后攻击尚未开放',
-    MOVE_BUDGET_TOO_SMALL: '每侧最大累计偏移不能小于移动按压最小值',
+    MOVE_HOLD_LIMIT: '移动按压最大值不能超过 5000 ms',
+    MOVE_BUDGET_TOO_SMALL: '每侧最大累计偏移至少要比移动按压最小值多 20 ms',
+    VISUAL_PROFILE_NOT_CONFIGURED: '请先在实时预览中框选平台安全区和自己的人物外观',
+    VISUAL_SELF_NOT_TRUSTED: '未能稳定锁定自己的人物外观，请检查人物框选或遮挡后重试',
+    VISUAL_NAME_SCORE_LOW: '人物外观暂时低于锁定阈值，已保留原视觉配置并继续尝试识别',
+    VISUAL_NAME_AMBIGUOUS: '人物外观候选位置不唯一，请等待遮挡减少后重试',
+    VISUAL_SELF_JUMP: '人物位置与配置位置偏差过大，请回到框选位置后重试',
+    VISUAL_CHARACTER_NOT_FOUND: '在框选位置附近未找到人物外观，请回到原位置后重试',
+    VISUAL_OUTSIDE_FROZEN: '人物位于平台安全外框之外，请手动回到框内后重试',
+    VISUAL_PROFILE_CLEAR_RUNNING: '运行期间不能清空视觉配置',
   }
+  if (code.startsWith('VISUAL_PROFILE_CLEAR_FAILED:')) return '清空视觉配置失败，请重试'
   return messages[code] ?? code
 }

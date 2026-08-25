@@ -3,6 +3,7 @@ namespace Maple.Core.Configuration;
 public enum AttackTriggerMode
 {
     Always,
+    VisualSafeContinuous,
     MonsterInRange
 }
 
@@ -10,6 +11,7 @@ public sealed record StationaryAttackConfig
 {
     public const int SchemaVersionCurrent = 1;
     public const int AttackDurationLimitMs = 60_000;
+    public const int MovementDurationLimitMs = 5_000;
 
     public static IReadOnlySet<string> AllowedAttackKeys { get; } = new HashSet<string>(
         ["Ctrl", "Shift", "Space", "A", "S", "D", "F", "Z", "X", "C", "V"],

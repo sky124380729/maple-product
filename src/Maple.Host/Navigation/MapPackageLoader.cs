@@ -52,7 +52,8 @@ public sealed record MapPackageSnapshot(
     ImmutableArray<MapStationPoint> StationPoints,
     ImmutableArray<MapPackageTemplate> MonsterTemplates,
     bool PlanningReady,
-    ImmutableArray<string> QualityReasons);
+    ImmutableArray<string> QualityReasons,
+    int MinimapReferenceTopInset = 0);
 
 public static class MapPackageLoader
 {
@@ -154,8 +155,14 @@ public static class MapPackageLoader
             stationPoints,
             templates,
             planningReady,
-            qualityReasons);
+            qualityReasons,
+            ParseMinimapReferenceTopInset(manifest));
     }
+
+    private static int ParseMinimapReferenceTopInset(JsonElement manifest) =>
+        string.Equals(StringValue(manifest, "app_version"), "1.0.0", StringComparison.Ordinal)
+            ? 32
+            : 0;
 
     private static MapMinimapRect? ParseMinimapRect(JsonElement manifest, JsonElement map)
     {
