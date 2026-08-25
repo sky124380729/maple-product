@@ -10,7 +10,7 @@ Keep character acquisition at `0.70`. After the same character has been establis
 
 The existing robust score can give a uniform missing-character patch about `0.6906`, because per-sample losses are deliberately capped for occlusion tolerance. Before enabling the lower tracking threshold, the matcher must reject a candidate whose sampled luminance range is below `16`. This mirrors the existing template texture requirement and prevents the robust baseline from turning an empty local patch into a tracked identity.
 
-The lower threshold applies only to a previously established appearance track inside the local scaled `12px` anchor window. If that fast local pass scores below `0.68`, a second pass scans the complete user-selected yellow platform rectangle. A distant yellow-area candidate must meet the acquisition score `0.70`, acquisition peak margin `0.06`, and three-new-frame stability before it can rebase the committed anchor. This lets a character move anywhere inside the configured platform without leaving the recognition ROI while keeping one low-score background frame from walking the identity anchor away.
+Initial acquisition and established tracking both use a two-level search. The fast pass uses the saved source or last committed anchor inside a scaled `12px` window. If initial local evidence misses `0.70/0.06`, or established local evidence misses `0.68/0.04`, a second pass scans the complete user-selected yellow platform rectangle. An initial or distant yellow-area candidate must meet the acquisition score `0.70`, acquisition peak margin `0.06`, and three-new-frame stability before it can establish or rebase the committed anchor. This lets a character start or move anywhere inside the configured platform without leaving the recognition ROI while keeping one low-score background frame from walking the identity anchor away.
 
 The green safe interior, edge guard width, and recenter band never crop either recognition pass; they authorize movement only after identity has been resolved. A local score below `0.68`, a yellow-area recovery score below `0.70`, ambiguity, an unconfirmed jump, a stale frame, or capture failure still revokes movement authorization immediately.
 
@@ -26,5 +26,6 @@ Only the appearance tracking threshold, candidate low-texture guard, two-level a
 - A uniform local patch scores below `0.68` and cannot preserve or recover identity.
 - A character candidate outside the green safe interior remains searchable around the trusted motion anchor.
 - A previously established character displaced beyond the local window is found anywhere inside the yellow platform rectangle.
+- A new session can acquire the configured appearance anywhere inside the yellow platform rectangle without redrawing the blue source.
 - A distant yellow-area candidate can rebase only after three unique `0.70` recovery frames.
 - Existing ambiguity and jump tests continue to pass.

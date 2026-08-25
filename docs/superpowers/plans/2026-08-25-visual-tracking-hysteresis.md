@@ -28,7 +28,7 @@
 
 - [ ] Add a failing matcher test proving a uniform missing-character patch scores below `0.68`.
 - [ ] Add a regression proving the appearance search area is independent of the green safe interior.
-- [ ] Add regressions proving a character beyond `12px` is found across the yellow platform and requires three recovery frames before rebasing.
+- [ ] Add regressions proving initial acquisition and established recovery both scan across the yellow platform and require three high-confidence frames.
 - [ ] Track the candidate sample luminance range in `Score` and return invalid evidence when the range is below `16`.
 - [ ] Change `CharacterTrackingScoreThreshold` from `0.70` to `0.68` while leaving `CharacterAcquisitionScoreThreshold` at `0.70`.
 - [ ] Add a yellow-platform recovery pass after local loss and rebase an established track only after three high-confidence stable frames.
