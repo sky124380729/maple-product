@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Maple.Host.Diagnostics;
 
@@ -18,7 +19,29 @@ public sealed record SessionLogEntry(
     int? ReleaseLatenessMs = null,
     int? OffsetBeforeMs = null,
     int? OffsetAfterMs = null,
-    int? MaxLateralMoveMs = null)
+    int? MaxLateralMoveMs = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? PlannerKind = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? OffsetBeforePx = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? OffsetAfterPx = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? UncertaintyBeforePx = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? UncertaintyAfterPx = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? UsableHalfWidthPx = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? CandidatePixelsPerMs = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? LeftSampleCount = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? RightSampleCount = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? LeftMedianPixelsPerMs = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? RightMedianPixelsPerMs = null)
 {
     public static SessionLogEntry Create(
         Guid sessionId,

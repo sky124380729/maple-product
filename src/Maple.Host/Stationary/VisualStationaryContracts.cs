@@ -1,5 +1,40 @@
 namespace Maple.Host.Stationary;
 
+public sealed record VisualFallbackTelemetry(
+    Guid SessionId,
+    long CycleId,
+    string Event,
+    string ResultCode,
+    string PlannerKind,
+    Maple.Core.Movement.MovementDirection? Direction = null,
+    Maple.Core.Movement.MovementIntent? Intent = null,
+    int? RequestedHoldMs = null,
+    int? ActualHoldMs = null,
+    int? OffsetBeforeMs = null,
+    int? OffsetAfterMs = null,
+    int? MaxLateralMoveMs = null,
+    double? OffsetBeforePx = null,
+    double? OffsetAfterPx = null,
+    double? UncertaintyBeforePx = null,
+    double? UncertaintyAfterPx = null,
+    double? UsableHalfWidthPx = null,
+    double? CandidatePixelsPerMs = null,
+    int? LeftSampleCount = null,
+    int? RightSampleCount = null,
+    double? LeftMedianPixelsPerMs = null,
+    double? RightMedianPixelsPerMs = null);
+
+public interface IVisualFallbackTelemetrySink
+{
+    Task WriteAsync(VisualFallbackTelemetry telemetry, CancellationToken cancellationToken);
+}
+
+public sealed class NullVisualFallbackTelemetrySink : IVisualFallbackTelemetrySink
+{
+    public Task WriteAsync(VisualFallbackTelemetry telemetry, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+}
+
 public readonly record struct FrameRect(int X, int Y, int Width, int Height)
 {
     public int Right => X + Width;

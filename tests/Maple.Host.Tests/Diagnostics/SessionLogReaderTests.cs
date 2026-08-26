@@ -43,6 +43,28 @@ public sealed class SessionLogReaderTests
     }
 
     [Fact]
+    public async Task Reads_legacy_rows_without_visual_telemetry_fields()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "maple-log-reader-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "sessions.jsonl");
+        Guid sessionId = Guid.NewGuid();
+        string legacyRow = $$"""
+            {"timestampUtc":"2026-08-26T00:00:00Z","sessionId":"{{sessionId}}","cycleId":4,"phase":"AttackHolding","event":"keyDown","resultCode":"OK"}
+            """;
+        await File.WriteAllTextAsync(path, legacyRow + Environment.NewLine);
+
+        SessionLogEntry entry = Assert.Single(await new SessionLogReader(path)
+            .ReadLatestAsync(200, CancellationToken.None));
+
+        Assert.Equal(sessionId, entry.SessionId);
+        Assert.Equal(4, entry.CycleId);
+        Assert.Null(entry.PlannerKind);
+        Assert.Null(entry.OffsetBeforePx);
+        Assert.Null(entry.RightMedianPixelsPerMs);
+    }
+
+    [Fact]
     public void Bridge_view_excludes_target_identity_and_unneeded_diagnostic_fields()
     {
         SessionLogEntry source = new(
