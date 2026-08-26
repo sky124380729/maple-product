@@ -7,6 +7,146 @@ namespace Maple.Host.Tests.Stationary;
 
 public sealed class VisualFallbackMovementPlannerTests
 {
+    [Theory]
+    [InlineData(MovementDirection.Left)]
+    [InlineData(MovementDirection.Right)]
+    public void Retains_the_most_recent_32_valid_samples_per_direction(MovementDirection direction)
+    {
+        var planner = new VisualFallbackMovementPlanner(new MinimumRandom(), platformWidthPx: 276);
+
+        for (int displacementPx = 10; displacementPx <= 41; displacementPx++)
+        {
+            planner.RecordTrustedMovement(
+                direction,
+                actualHoldMs: 100,
+                beforeCenterX: 100,
+                afterCenterX: 100 + (int)direction * displacementPx);
+        }
+
+        Assert.Equal(32, SampleCount(planner, direction));
+        Assert.Equal(0.255, MedianPixelsPerMs(planner, direction), 6);
+
+        planner.RecordTrustedMovement(
+            direction,
+            actualHoldMs: 100,
+            beforeCenterX: 100,
+            afterCenterX: 100 + (int)direction * 50);
+
+        Assert.Equal(32, SampleCount(planner, direction));
+        Assert.Equal(0.265, MedianPixelsPerMs(planner, direction), 6);
+    }
+
+    [Fact]
+    public void Returns_a_structured_result_for_an_accepted_observation()
+    {
+        var planner = new VisualFallbackMovementPlanner(new MinimumRandom(), platformWidthPx: 276);
+
+        var result = planner.RecordTrustedMovement(
+            MovementDirection.Right,
+            actualHoldMs: 40,
+            beforeCenterX: 100,
+            afterCenterX: 120);
+
+        Assert.True(result.Accepted);
+        Assert.Equal("VISUAL_CALIBRATION_ACCEPTED", result.ResultCode);
+        Assert.Equal(MovementDirection.Right, result.Direction);
+        Assert.Equal(40, result.ActualHoldMs);
+        Assert.Equal(100, result.BeforeCenterX);
+        Assert.Equal(120, result.AfterCenterX);
+        Assert.Equal(20, result.DisplacementPx);
+        Assert.Equal(0.5, result.CandidatePixelsPerMs);
+        Assert.Equal(0, result.LeftSampleCount);
+        Assert.Equal(1, result.RightSampleCount);
+        Assert.Null(result.LeftMedianPixelsPerMs);
+        Assert.Equal(0.5, result.RightMedianPixelsPerMs);
+    }
+
+    [Fact]
+    public void Returns_a_structured_result_for_a_rejected_observation_without_changing_samples()
+    {
+        var planner = new VisualFallbackMovementPlanner(new MinimumRandom(), platformWidthPx: 276);
+        planner.RecordTrustedMovement(MovementDirection.Right, 40, 100, 120);
+
+        var result = planner.RecordTrustedMovement(
+            MovementDirection.Left,
+            actualHoldMs: 40,
+            beforeCenterX: 100,
+            afterCenterX: 105);
+
+        Assert.False(result.Accepted);
+        Assert.Equal("VISUAL_CALIBRATION_DISPLACEMENT_INVALID", result.ResultCode);
+        Assert.Equal(MovementDirection.Left, result.Direction);
+        Assert.Equal(40, result.ActualHoldMs);
+        Assert.Equal(100, result.BeforeCenterX);
+        Assert.Equal(105, result.AfterCenterX);
+        Assert.Equal(-5, result.DisplacementPx);
+        Assert.Equal(-0.125, result.CandidatePixelsPerMs);
+        Assert.Equal(0, result.LeftSampleCount);
+        Assert.Equal(1, result.RightSampleCount);
+        Assert.Null(result.LeftMedianPixelsPerMs);
+        Assert.Equal(0.5, result.RightMedianPixelsPerMs);
+    }
+
+    [Theory]
+    [InlineData(0, 80, "VISUAL_CALIBRATION_TIMING_INVALID")]
+    [InlineData(40, -20, "VISUAL_CALIBRATION_RATE_INVALID")]
+    public void Returns_structured_codes_for_timing_and_rate_rejections_without_changing_samples(
+        int actualHoldMs,
+        int afterCenterX,
+        string expectedResultCode)
+    {
+        var planner = new VisualFallbackMovementPlanner(new MinimumRandom(), platformWidthPx: 276);
+        planner.RecordTrustedMovement(MovementDirection.Right, 40, 100, 120);
+
+        var result = planner.RecordTrustedMovement(
+            MovementDirection.Left,
+            actualHoldMs,
+            beforeCenterX: 100,
+            afterCenterX);
+
+        Assert.False(result.Accepted);
+        Assert.Equal(expectedResultCode, result.ResultCode);
+        Assert.Equal(0, result.LeftSampleCount);
+        Assert.Equal(1, result.RightSampleCount);
+        Assert.Equal(0, planner.LeftSampleCount);
+        Assert.Equal(1, planner.RightSampleCount);
+    }
+
+    [Fact]
+    public void Starting_fallback_preserves_the_trusted_anchor_time_offset_in_the_public_snapshot()
+    {
+        VisualFallbackMovementPlanner planner = Calibrated(new MinimumRandom());
+
+        planner.ObserveTrustedPosition(offsetPx: -12, guardWidthPx: 48, relativeOffsetMs: 31);
+        Assert.True(planner.TryStartFallback(MovementDirection.Right));
+
+        VisualFallbackProjectionSnapshot snapshot = Assert.IsType<VisualFallbackProjectionSnapshot>(
+            planner.ProjectionSnapshot);
+        Assert.Equal(-12, snapshot.OffsetPx);
+        Assert.Equal(2, snapshot.UncertaintyPx);
+        Assert.Equal(31, snapshot.RelativeOffsetMs);
+    }
+
+    [Fact]
+    public void Ending_fallback_reanchors_the_projection_with_the_current_real_time_offset()
+    {
+        VisualFallbackMovementPlanner planner = Calibrated(new MinimumRandom());
+        planner.ObserveTrustedPosition(offsetPx: 0, guardWidthPx: 48, relativeOffsetMs: 18);
+        Assert.True(planner.TryStartFallback(MovementDirection.Right));
+
+        planner.EndFallback(
+            trustedOffsetPx: 7,
+            trustedGuardWidthPx: 48,
+            relativeOffsetMs: -23);
+
+        VisualFallbackProjectionSnapshot snapshot = Assert.IsType<VisualFallbackProjectionSnapshot>(
+            planner.ProjectionSnapshot);
+        Assert.False(planner.IsFallbackActive);
+        Assert.Equal(7, snapshot.OffsetPx);
+        Assert.Equal(2, snapshot.UncertaintyPx);
+        Assert.Equal(-23, snapshot.RelativeOffsetMs);
+    }
+
     [Fact]
     public void Requires_two_valid_samples_per_direction_and_uses_direction_medians()
     {
@@ -134,6 +274,16 @@ public sealed class VisualFallbackMovementPlannerTests
         MoveHoldMaxMs = 50,
         RestEnabled = false
     };
+
+    private static int SampleCount(
+        VisualFallbackMovementPlanner planner,
+        MovementDirection direction) =>
+        direction == MovementDirection.Left ? planner.LeftSampleCount : planner.RightSampleCount;
+
+    private static double MedianPixelsPerMs(
+        VisualFallbackMovementPlanner planner,
+        MovementDirection direction) =>
+        (direction == MovementDirection.Left ? planner.LeftPixelsPerMs : planner.RightPixelsPerMs)!.Value;
 
     private sealed class MinimumRandom : IRandomSource
     {

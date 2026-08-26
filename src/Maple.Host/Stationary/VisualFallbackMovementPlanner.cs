@@ -6,11 +6,30 @@ namespace Maple.Host.Stationary;
 
 public sealed record VisualFallbackCycle(double StartOffsetPx, MovementIntent Intent);
 
+public sealed record VisualFallbackCalibrationResult(
+    bool Accepted,
+    string ResultCode,
+    MovementDirection Direction,
+    int ActualHoldMs,
+    double BeforeCenterX,
+    double AfterCenterX,
+    double DisplacementPx,
+    double? CandidatePixelsPerMs,
+    int LeftSampleCount,
+    int RightSampleCount,
+    double? LeftMedianPixelsPerMs,
+    double? RightMedianPixelsPerMs);
+
+public sealed record VisualFallbackProjectionSnapshot(
+    double OffsetPx,
+    double UncertaintyPx,
+    int RelativeOffsetMs);
+
 public sealed class VisualFallbackMovementPlanner(IRandomSource random, int platformWidthPx)
 {
     public const int ReleaseSafetyMarginMs = 20;
     public const int RequiredSamplesPerDirection = 2;
-    private const int MaximumSamplesPerDirection = 8;
+    private const int MaximumSamplesPerDirection = 32;
     private const double MinimumDisplacementPx = 2;
     private const double MinimumPixelsPerMs = 0.05;
     private const double MaximumPixelsPerMs = 2.50;
@@ -31,30 +50,69 @@ public sealed class VisualFallbackMovementPlanner(IRandomSource random, int plat
     public int RelativeOffsetMs => estimate?.RelativeOffsetMs ?? 0;
     public double? PredictedOffsetPx => estimate?.OffsetPx;
     public double UncertaintyPx => estimate?.UncertaintyPx ?? 0;
+    public VisualFallbackProjectionSnapshot? ProjectionSnapshot => estimate is { } current
+        ? new(current.OffsetPx, current.UncertaintyPx, current.RelativeOffsetMs)
+        : null;
     public double? LeftPixelsPerMs => Median(leftSamples);
     public double? RightPixelsPerMs => Median(rightSamples);
     public MovementDirection InitialFacing { get; private set; }
 
-    public void RecordTrustedMovement(
+    public VisualFallbackCalibrationResult RecordTrustedMovement(
         MovementDirection direction,
         int actualHoldMs,
         double beforeCenterX,
         double afterCenterX)
     {
-        if (actualHoldMs <= 0 || actualHoldMs > StationaryAttackConfig.MovementDurationLimitMs) return;
         double displacement = (afterCenterX - beforeCenterX) * (int)direction;
-        if (displacement < MinimumDisplacementPx) return;
-        double rate = displacement / actualHoldMs;
-        if (rate is < MinimumPixelsPerMs or > MaximumPixelsPerMs) return;
+        double? rate = actualHoldMs > 0 ? displacement / actualHoldMs : null;
+        if (actualHoldMs <= 0 || actualHoldMs > StationaryAttackConfig.MovementDurationLimitMs)
+            return CalibrationResult(
+                accepted: false,
+                "VISUAL_CALIBRATION_TIMING_INVALID",
+                direction,
+                actualHoldMs,
+                beforeCenterX,
+                afterCenterX,
+                displacement,
+                rate);
+        if (displacement < MinimumDisplacementPx)
+            return CalibrationResult(
+                accepted: false,
+                "VISUAL_CALIBRATION_DISPLACEMENT_INVALID",
+                direction,
+                actualHoldMs,
+                beforeCenterX,
+                afterCenterX,
+                displacement,
+                rate);
+        if (!double.IsFinite(rate!.Value) || rate.Value is < MinimumPixelsPerMs or > MaximumPixelsPerMs)
+            return CalibrationResult(
+                accepted: false,
+                "VISUAL_CALIBRATION_RATE_INVALID",
+                direction,
+                actualHoldMs,
+                beforeCenterX,
+                afterCenterX,
+                displacement,
+                rate);
         Queue<double> samples = direction == MovementDirection.Left ? leftSamples : rightSamples;
-        samples.Enqueue(rate);
+        samples.Enqueue(rate.Value);
         while (samples.Count > MaximumSamplesPerDirection) samples.Dequeue();
+        return CalibrationResult(
+            accepted: true,
+            "VISUAL_CALIBRATION_ACCEPTED",
+            direction,
+            actualHoldMs,
+            beforeCenterX,
+            afterCenterX,
+            displacement,
+            rate);
     }
 
-    public void ObserveTrustedPosition(int offsetPx, int guardWidthPx)
+    public void ObserveTrustedPosition(int offsetPx, int guardWidthPx, int relativeOffsetMs = 0)
     {
         this.guardWidthPx = guardWidthPx;
-        estimate = new Projection(offsetPx, InitialUncertaintyPx, 0);
+        estimate = new Projection(offsetPx, InitialUncertaintyPx, relativeOffsetMs);
         IsFallbackActive = false;
         returnTowardCenterRequired = false;
     }
@@ -69,15 +127,17 @@ public sealed class VisualFallbackMovementPlanner(IRandomSource random, int plat
     {
         if (!IsCalibrated || estimate is null || !IsInsidePixelBoundary(estimate.Value)) return false;
         InitialFacing = initialFacing;
-        estimate = estimate.Value with { RelativeOffsetMs = 0 };
         IsFallbackActive = true;
         returnTowardCenterRequired = false;
         return true;
     }
 
-    public void EndFallback(int trustedOffsetPx, int trustedGuardWidthPx)
+    public void EndFallback(
+        int trustedOffsetPx,
+        int trustedGuardWidthPx,
+        int relativeOffsetMs = 0)
     {
-        ObserveTrustedPosition(trustedOffsetPx, trustedGuardWidthPx);
+        ObserveTrustedPosition(trustedOffsetPx, trustedGuardWidthPx, relativeOffsetMs);
     }
 
     public void InvalidateFallbackAnchor()
@@ -272,6 +332,29 @@ public sealed class VisualFallbackMovementPlanner(IRandomSource random, int plat
         candidates.Count == 0
             ? null
             : new MovementSegment(direction, candidates[random.NextInclusive(0, candidates.Count - 1)]);
+
+    private VisualFallbackCalibrationResult CalibrationResult(
+        bool accepted,
+        string resultCode,
+        MovementDirection direction,
+        int actualHoldMs,
+        double beforeCenterX,
+        double afterCenterX,
+        double displacementPx,
+        double? candidatePixelsPerMs) =>
+        new(
+            accepted,
+            resultCode,
+            direction,
+            actualHoldMs,
+            beforeCenterX,
+            afterCenterX,
+            displacementPx,
+            candidatePixelsPerMs,
+            LeftSampleCount,
+            RightSampleCount,
+            LeftPixelsPerMs,
+            RightPixelsPerMs);
 
     private static double? Median(IEnumerable<double> source)
     {
