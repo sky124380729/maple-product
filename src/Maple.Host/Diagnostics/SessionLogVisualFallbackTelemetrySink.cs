@@ -35,7 +35,9 @@ public sealed class SessionLogVisualFallbackTelemetrySink(ISessionLog log) : IVi
                     LeftSampleCount: telemetry.LeftSampleCount,
                     RightSampleCount: telemetry.RightSampleCount,
                     LeftMedianPixelsPerMs: telemetry.LeftMedianPixelsPerMs,
-                    RightMedianPixelsPerMs: telemetry.RightMedianPixelsPerMs),
+                    RightMedianPixelsPerMs: telemetry.RightMedianPixelsPerMs,
+                    DisplacementPx: telemetry.DisplacementPx,
+                    BoundaryResult: telemetry.BoundaryResult),
                 cancellationToken);
         }
         catch

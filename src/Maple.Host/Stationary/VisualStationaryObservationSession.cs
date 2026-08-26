@@ -200,19 +200,25 @@ public sealed class VisualStationaryObservationSession : IVisualStationaryObserv
         }
     }
 
-    public void RecordMovement(double beforeX, double afterX, double jitterPx)
+    public VisualStationaryObservation? RecordMovement(
+        double beforeX,
+        double afterX,
+        double jitterPx,
+        VisualStationaryObservation? trustedAnchor = null)
     {
         lock (processingSync)
         {
             safety.RecordMovement(beforeX, afterX, jitterPx);
-            VisualStationaryObservation? current = Latest;
-            if (current is not { IdentityTrusted: true } || !current.Platform.CenterX.HasValue) return;
+            VisualStationaryObservation? current = trustedAnchor ?? Latest;
+            if (current is not { IdentityTrusted: true } || !current.Platform.CenterX.HasValue) return null;
 
             VisualPlatformState platform = safety.ObserveTrusted(
                 current.FrameSequence,
                 current.Platform.CenterX.Value,
                 current.Platform.BestScore);
-            Publish(current with { Platform = platform, Code = platform.Code });
+            VisualStationaryObservation updated = current with { Platform = platform, Code = platform.Code };
+            Publish(updated);
+            return updated;
         }
     }
 

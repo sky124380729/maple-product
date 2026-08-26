@@ -22,7 +22,9 @@ public sealed record VisualFallbackTelemetry(
     int? LeftSampleCount = null,
     int? RightSampleCount = null,
     double? LeftMedianPixelsPerMs = null,
-    double? RightMedianPixelsPerMs = null);
+    double? RightMedianPixelsPerMs = null,
+    double? DisplacementPx = null,
+    string? BoundaryResult = null);
 
 public interface IVisualFallbackTelemetrySink
 {
@@ -154,7 +156,11 @@ public interface IVisualStationaryObservationSource
         long minimumSequence,
         TimeSpan timeout,
         CancellationToken cancellationToken);
-    void RecordMovement(double beforeX, double afterX, double jitterPx);
+    VisualStationaryObservation? RecordMovement(
+        double beforeX,
+        double afterX,
+        double jitterPx,
+        VisualStationaryObservation? trustedAnchor = null);
 }
 
 public sealed record VisualStartupDecision(bool ShouldStart, string Code);

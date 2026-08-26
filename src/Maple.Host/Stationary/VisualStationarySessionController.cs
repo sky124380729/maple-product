@@ -16,7 +16,8 @@ public sealed class VisualStationarySessionController(
     IVisualStationaryObservationSource observations,
     IRandomSource random,
     IStationaryStatePublisher rhythmPublisher,
-    IVisualStationaryStatePublisher visualPublisher)
+    IVisualStationaryStatePublisher visualPublisher,
+    IVisualFallbackTelemetrySink fallbackTelemetry)
 {
     private const int AttackReleaseSettleMs = 100;
     private const int DirectionReleaseSettleMs = 100;
@@ -143,7 +144,8 @@ public sealed class VisualStationarySessionController(
             {
                 fallbackPlanner.EndFallback(
                     current.Platform.OffsetFromCenterPx.Value,
-                    current.Platform.GuardWidthPx);
+                    current.Platform.GuardWidthPx,
+                    relativeOffsetMs);
                 if (recovered)
                 {
                     PublishVisual(
@@ -187,7 +189,7 @@ public sealed class VisualStationarySessionController(
                 config.MaxLateralMoveMs);
             continuousMovementPlanner.StartSession(initialFacing, boundedOffsetMs);
             continuousFallbackActive = true;
-            _ = fallbackPlanner.TryStartFallback(initialFacing);
+            _ = fallbackPlanner.TryStartFallback(initialFacing, boundedOffsetMs);
         }
         PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_CONTINUOUS");
         return true;
@@ -275,22 +277,80 @@ public sealed class VisualStationarySessionController(
         StationaryAttackConfig config,
         CancellationToken cancellationToken)
     {
+        if (fallbackPlanner.IsCalibrated)
+        {
+            await RunCalibratedFallbackMovementCycleAsync(
+                sessionId,
+                cycleId,
+                sampledAttackDurationMs,
+                config,
+                cancellationToken);
+            return;
+        }
+
+        await RunUncalibratedFallbackMovementCycleAsync(
+            sessionId,
+            cycleId,
+            sampledAttackDurationMs,
+            config,
+            cancellationToken);
+    }
+
+    private async Task RunUncalibratedFallbackMovementCycleAsync(
+        Guid sessionId,
+        long cycleId,
+        int sampledAttackDurationMs,
+        StationaryAttackConfig config,
+        CancellationToken cancellationToken)
+    {
         PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_CONTINUOUS");
-        MovementCycle cycle = continuousMovementPlanner.BeginCycle(config);
-        MovementSegment? first = continuousMovementPlanner.TryCreateFirstSegment(config, cycle);
+        StationaryAttackConfig conservativeConfig = config with
+        {
+            MoveHoldMaxMs = config.MoveHoldMinMs + (config.MoveHoldMaxMs - config.MoveHoldMinMs) / 2
+        };
+        MovementCycle cycle = continuousMovementPlanner.BeginCycle(conservativeConfig);
+        MovementSegment? first = continuousMovementPlanner.TryCreateFirstSegment(conservativeConfig, cycle);
         MovementSegment? recovery = first is null
-            ? continuousMovementPlanner.TryCreateRecoverySegment(config)
+            ? continuousMovementPlanner.TryCreateRecoverySegment(conservativeConfig)
             : null;
         if (first is null)
         {
             if (recovery is null)
             {
-                PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE");
-                return;
+                await WriteUncalibratedFallbackDecisionAsync(
+                    sessionId,
+                    cycleId,
+                    cycle.Intent,
+                    null,
+                    config,
+                    "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE",
+                    cancellationToken);
+                    PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE");
+                    int frozenStabilizeMs = random.NextInclusive(config.StabilizeMinMs, config.StabilizeMaxMs);
+                    await DelayPhaseAsync(
+                        sessionId,
+                        cycleId,
+                        StationaryPhase.Stabilizing,
+                        frozenStabilizeMs,
+                        sampledAttackDurationMs,
+                        cancellationToken);
+                    return;
             }
         }
 
-        observations.BeginMovementTracking((first ?? recovery)!.Direction);
+        MovementSegment selected = (first ?? recovery)!;
+        MovementIntent selectedIntent = first is null
+            ? MovementIntent.RecoveryTowardCenter
+            : cycle.Intent;
+        await WriteUncalibratedFallbackDecisionAsync(
+            sessionId,
+            cycleId,
+            selectedIntent,
+            selected,
+            config,
+            "VISUAL_FALLBACK_SEGMENT_SELECTED",
+            cancellationToken);
+        observations.BeginMovementTracking(selected.Direction);
         try
         {
             if (first is null)
@@ -300,9 +360,11 @@ public sealed class VisualStationarySessionController(
                     cycleId,
                     StationaryPhase.MoveSecond,
                     recovery!,
+                    selectedIntent,
                     sampledAttackDurationMs,
                     config,
                     cancellationToken);
+                continuousMovementPlanner.CompleteCycle(conservativeConfig, cycle);
             }
             else
             {
@@ -311,6 +373,7 @@ public sealed class VisualStationarySessionController(
                     cycleId,
                     StationaryPhase.MoveFirst,
                     first,
+                    cycle.Intent,
                     sampledAttackDurationMs,
                     config,
                     cancellationToken);
@@ -326,21 +389,47 @@ public sealed class VisualStationarySessionController(
                 MovementSegment second;
                 try
                 {
-                    second = continuousMovementPlanner.CreateSecondSegment(config, cycle);
+                    second = continuousMovementPlanner.CreateSecondSegment(conservativeConfig, cycle);
                 }
-                catch (InvalidOperationException exception)
+                catch (InvalidOperationException)
                 {
-                    throw new VisualSessionStopException(exception.Message);
+                    await WriteUncalibratedFallbackDecisionAsync(
+                        sessionId,
+                        cycleId,
+                        cycle.Intent,
+                        null,
+                        config,
+                        "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE",
+                        cancellationToken);
+                    PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE");
+                    int frozenStabilizeMs = continuousMovementPlanner.SampleStabilizeMs(config);
+                    await DelayPhaseAsync(
+                        sessionId,
+                        cycleId,
+                        StationaryPhase.Stabilizing,
+                        frozenStabilizeMs,
+                        sampledAttackDurationMs,
+                        cancellationToken);
+                    return;
                 }
+                await WriteUncalibratedFallbackDecisionAsync(
+                    sessionId,
+                    cycleId,
+                    cycle.Intent,
+                    second,
+                    config,
+                    "VISUAL_FALLBACK_SEGMENT_SELECTED",
+                    cancellationToken);
                 await ExecuteFallbackSegmentAsync(
                     sessionId,
                     cycleId,
                     StationaryPhase.MoveSecond,
                     second,
+                    cycle.Intent,
                     sampledAttackDurationMs,
                     config,
                     cancellationToken);
-                continuousMovementPlanner.CompleteCycle(config, cycle);
+                continuousMovementPlanner.CompleteCycle(conservativeConfig, cycle);
             }
 
             int stabilizeMs = continuousMovementPlanner.SampleStabilizeMs(config);
@@ -359,11 +448,184 @@ public sealed class VisualStationarySessionController(
         }
     }
 
-    private async Task ExecuteFallbackSegmentAsync(
+    private async Task RunCalibratedFallbackMovementCycleAsync(
+        Guid sessionId,
+        long cycleId,
+        int sampledAttackDurationMs,
+        StationaryAttackConfig config,
+        CancellationToken cancellationToken)
+    {
+        PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_CONTINUOUS");
+        if (!fallbackPlanner.IsFallbackActive)
+        {
+            await WriteCalibratedFallbackDecisionAsync(
+                sessionId,
+                cycleId,
+                null,
+                null,
+                config,
+                "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE",
+                cancellationToken);
+            PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE");
+            return;
+        }
+
+        VisualFallbackCycle cycle;
+        MovementSegment? first;
+        MovementSegment? recovery;
+        try
+        {
+            cycle = fallbackPlanner.BeginCycle(config);
+            first = fallbackPlanner.TryCreateFirstSegment(config, cycle);
+            recovery = first is null
+                ? fallbackPlanner.TryCreateRecoverySegment(config)
+                : null;
+        }
+        catch (InvalidOperationException)
+        {
+            await WriteCalibratedFallbackDecisionAsync(
+                sessionId,
+                cycleId,
+                null,
+                null,
+                config,
+                "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE",
+                cancellationToken);
+            PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE");
+            return;
+        }
+
+        MovementSegment? selected = first ?? recovery;
+        if (selected is null)
+        {
+            await WriteCalibratedFallbackDecisionAsync(
+                sessionId,
+                cycleId,
+                cycle.Intent,
+                null,
+                config,
+                "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE",
+                cancellationToken);
+            PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE");
+            return;
+        }
+
+        MovementIntent selectedIntent = first is null
+            ? MovementIntent.RecoveryTowardCenter
+            : cycle.Intent;
+        await WriteCalibratedFallbackDecisionAsync(
+            sessionId,
+            cycleId,
+            selectedIntent,
+            selected,
+            config,
+            "VISUAL_FALLBACK_SEGMENT_SELECTED",
+            cancellationToken);
+        observations.BeginMovementTracking(selected.Direction);
+        try
+        {
+            if (first is null)
+            {
+                await ExecuteCalibratedFallbackSegmentAsync(
+                    sessionId,
+                    cycleId,
+                    StationaryPhase.MoveSecond,
+                    recovery!,
+                    selectedIntent,
+                    sampledAttackDurationMs,
+                    config,
+                    cancellationToken);
+                fallbackPlanner.CompleteCycle(cycle);
+            }
+            else
+            {
+                await ExecuteCalibratedFallbackSegmentAsync(
+                    sessionId,
+                    cycleId,
+                    StationaryPhase.MoveFirst,
+                    first,
+                    cycle.Intent,
+                    sampledAttackDurationMs,
+                    config,
+                    cancellationToken);
+                int gapMs = checked(
+                    DirectionReleaseSettleMs + random.NextInclusive(config.MoveGapMinMs, config.MoveGapMaxMs));
+                await DelayPhaseAsync(
+                    sessionId,
+                    cycleId,
+                    StationaryPhase.MoveGap,
+                    gapMs,
+                    sampledAttackDurationMs,
+                    cancellationToken);
+
+                MovementSegment second;
+                try
+                {
+                    second = fallbackPlanner.CreateSecondSegment(config, cycle);
+                }
+                catch (InvalidOperationException)
+                {
+                    await WriteCalibratedFallbackDecisionAsync(
+                        sessionId,
+                        cycleId,
+                        cycle.Intent,
+                        null,
+                        config,
+                        "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE",
+                        cancellationToken);
+                    PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE");
+                    int frozenStabilizeMs = random.NextInclusive(config.StabilizeMinMs, config.StabilizeMaxMs);
+                    await DelayPhaseAsync(
+                        sessionId,
+                        cycleId,
+                        StationaryPhase.Stabilizing,
+                        frozenStabilizeMs,
+                        sampledAttackDurationMs,
+                        cancellationToken);
+                    return;
+                }
+                await WriteCalibratedFallbackDecisionAsync(
+                    sessionId,
+                    cycleId,
+                    cycle.Intent,
+                    second,
+                    config,
+                    "VISUAL_FALLBACK_SEGMENT_SELECTED",
+                    cancellationToken);
+                await ExecuteCalibratedFallbackSegmentAsync(
+                    sessionId,
+                    cycleId,
+                    StationaryPhase.MoveSecond,
+                    second,
+                    cycle.Intent,
+                    sampledAttackDurationMs,
+                    config,
+                    cancellationToken);
+                fallbackPlanner.CompleteCycle(cycle);
+            }
+
+            int stabilizeMs = random.NextInclusive(config.StabilizeMinMs, config.StabilizeMaxMs);
+            await DelayPhaseAsync(
+                sessionId,
+                cycleId,
+                StationaryPhase.Stabilizing,
+                stabilizeMs,
+                sampledAttackDurationMs,
+                cancellationToken);
+            PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_CONTINUOUS");
+        }
+        finally
+        {
+            observations.EndMovementTracking();
+        }
+    }
+
+    private async Task ExecuteCalibratedFallbackSegmentAsync(
         Guid sessionId,
         long cycleId,
         StationaryPhase phase,
         MovementSegment segment,
+        MovementIntent intent,
         int sampledAttackDurationMs,
         StationaryAttackConfig config,
         CancellationToken cancellationToken)
@@ -376,9 +638,118 @@ public sealed class VisualStationarySessionController(
             segment.HoldMs,
             sampledAttackDurationMs,
             cancellationToken);
-        if (result.ActualHoldMs is not >= 1 or > StationaryAttackConfig.MovementDurationLimitMs ||
-            result.ReleaseLatenessMs is null or < 0)
+        VisualFallbackProjectionSnapshot before = RequireFallbackProjection();
+        if (HasValidActualHold(result.ActualHoldMs))
+            relativeOffsetMs = checked(
+                relativeOffsetMs + (int)segment.Direction * result.ActualHoldMs!.Value);
+        if (!IsValidMovementTiming(result))
+        {
+            VisualFallbackProjectionSnapshot timingAfter = HasValidActualHold(result.ActualHoldMs)
+                ? fallbackPlanner.PreviewSegment(segment.Direction, result.ActualHoldMs!.Value)
+                : before;
+            await WriteFallbackTelemetryAsync(
+                CreateCalibratedFallbackTelemetry(
+                    sessionId,
+                    cycleId,
+                    "Completed",
+                    "MOVEMENT_TIMING_INVALID",
+                    intent,
+                    segment,
+                    result.ActualHoldMs,
+                    before,
+                    timingAfter,
+                    config),
+                cancellationToken);
             throw new VisualSessionStopException("MOVEMENT_TIMING_INVALID");
+        }
+        VisualFallbackProjectionSnapshot attemptedAfter = fallbackPlanner.PreviewSegment(
+            segment.Direction,
+            result.ActualHoldMs!.Value);
+        try
+        {
+            fallbackPlanner.ApplyCompletedSegment(
+                segment.Direction,
+                result.ActualHoldMs.Value,
+                config.MaxLateralMoveMs);
+        }
+        catch (InvalidOperationException exception)
+        {
+            await WriteFallbackTelemetryAsync(
+                CreateCalibratedFallbackTelemetry(
+                    sessionId,
+                    cycleId,
+                    "Completed",
+                    exception.Message,
+                    intent,
+                    segment,
+                    result.ActualHoldMs,
+                    before,
+                    attemptedAfter,
+                    config),
+                cancellationToken);
+            throw new VisualSessionStopException(exception.Message);
+        }
+        VisualFallbackProjectionSnapshot after = RequireFallbackProjection();
+        await WriteFallbackTelemetryAsync(
+            CreateCalibratedFallbackTelemetry(
+                sessionId,
+                cycleId,
+                "Completed",
+                "VISUAL_FALLBACK_SEGMENT_COMPLETED",
+                intent,
+                segment,
+                result.ActualHoldMs,
+                before,
+                after,
+                config),
+            cancellationToken);
+        PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_CONTINUOUS");
+    }
+
+    private async Task ExecuteFallbackSegmentAsync(
+        Guid sessionId,
+        long cycleId,
+        StationaryPhase phase,
+        MovementSegment segment,
+        MovementIntent intent,
+        int sampledAttackDurationMs,
+        StationaryAttackConfig config,
+        CancellationToken cancellationToken)
+    {
+        int offsetBeforeMs = continuousMovementPlanner.RelativeOffsetMs;
+        InputActionResult result = await HoldAsync(
+            sessionId,
+            cycleId,
+            phase,
+            ToInputAction(segment.Direction),
+            segment.HoldMs,
+            sampledAttackDurationMs,
+            cancellationToken);
+        if (HasValidActualHold(result.ActualHoldMs))
+            relativeOffsetMs = checked(
+                relativeOffsetMs + (int)segment.Direction * result.ActualHoldMs!.Value);
+        if (!IsValidMovementTiming(result))
+        {
+            int timingOffsetAfterMs = HasValidActualHold(result.ActualHoldMs)
+                ? checked(offsetBeforeMs + (int)segment.Direction * result.ActualHoldMs!.Value)
+                : offsetBeforeMs;
+            await WriteFallbackTelemetryAsync(
+                CreateUncalibratedFallbackTelemetry(
+                    sessionId,
+                    cycleId,
+                    "Completed",
+                    "MOVEMENT_TIMING_INVALID",
+                    intent,
+                    segment,
+                    result.ActualHoldMs,
+                    offsetBeforeMs,
+                    timingOffsetAfterMs,
+                    config),
+                cancellationToken);
+            throw new VisualSessionStopException("MOVEMENT_TIMING_INVALID");
+        }
+        int attemptedOffsetAfterMs = checked(
+            offsetBeforeMs + (int)segment.Direction * result.ActualHoldMs!.Value);
         try
         {
             continuousMovementPlanner.ApplyCompletedSegment(
@@ -388,10 +759,35 @@ public sealed class VisualStationarySessionController(
         }
         catch (InvalidOperationException exception)
         {
+            await WriteFallbackTelemetryAsync(
+                CreateUncalibratedFallbackTelemetry(
+                    sessionId,
+                    cycleId,
+                    "Completed",
+                    exception.Message,
+                    intent,
+                    segment,
+                    result.ActualHoldMs,
+                    offsetBeforeMs,
+                    attemptedOffsetAfterMs,
+                    config),
+                cancellationToken);
             throw new VisualSessionStopException(exception.Message);
         }
         fallbackPlanner.TrackUnverifiedMovement(segment.Direction, result.ActualHoldMs.Value);
-        relativeOffsetMs += (int)segment.Direction * result.ActualHoldMs.Value;
+        await WriteFallbackTelemetryAsync(
+            CreateUncalibratedFallbackTelemetry(
+                sessionId,
+                cycleId,
+                "Completed",
+                "VISUAL_FALLBACK_SEGMENT_COMPLETED",
+                intent,
+                segment,
+                result.ActualHoldMs,
+                offsetBeforeMs,
+                continuousMovementPlanner.RelativeOffsetMs,
+                config),
+            cancellationToken);
         PublishFallbackVisual(sessionId, cycleId, "VISUAL_FALLBACK_CONTINUOUS");
     }
 
@@ -408,6 +804,8 @@ public sealed class VisualStationarySessionController(
         long? authorizationRetryDeadlineMonoMs = null;
         MovementHoldResult? movement;
         MovementDirection authorizedDirection;
+        int requestedHoldMs;
+        int offsetBeforeMovementMs;
         bool movementTrackingActive = false;
         try
         {
@@ -442,6 +840,8 @@ public sealed class VisualStationarySessionController(
                 if (!decision.ShouldMove) return false;
 
                 authorizedDirection = decision.Direction ?? requestedDirection;
+                requestedHoldMs = decision.HoldMs;
+                offsetBeforeMovementMs = relativeOffsetMs;
                 observations.BeginMovementTracking(authorizedDirection);
                 movementTrackingActive = true;
                 movement = await HoldMovementAsync(
@@ -505,13 +905,39 @@ public sealed class VisualStationarySessionController(
             if (after is not null && before.Platform.CenterX.HasValue && after.Platform.CenterX.HasValue)
             {
                 double jitter = Math.Abs(after.Platform.CenterX.Value - Math.Round(after.Platform.CenterX.Value));
-                fallbackPlanner.RecordTrustedMovement(
+                VisualFallbackCalibrationResult calibration = fallbackPlanner.RecordTrustedMovement(
                     authorizedDirection,
                     result.ActualHoldMs.Value,
                     before.Platform.CenterX.Value,
                     after.Platform.CenterX.Value);
-                observations.RecordMovement(before.Platform.CenterX.Value, after.Platform.CenterX.Value, jitter);
-                ObserveTrustedPosition(observations.Latest ?? after);
+                await WriteFallbackTelemetryAsync(
+                    new VisualFallbackTelemetry(
+                        sessionId,
+                        cycleId,
+                        "Calibration",
+                        calibration.ResultCode,
+                        "Visual",
+                        Direction: calibration.Direction,
+                        RequestedHoldMs: requestedHoldMs,
+                        ActualHoldMs: calibration.ActualHoldMs,
+                        OffsetBeforeMs: offsetBeforeMovementMs,
+                        OffsetAfterMs: relativeOffsetMs,
+                        MaxLateralMoveMs: config.MaxLateralMoveMs,
+                        OffsetBeforePx: calibration.BeforeCenterX,
+                        OffsetAfterPx: calibration.AfterCenterX,
+                        CandidatePixelsPerMs: calibration.CandidatePixelsPerMs,
+                        LeftSampleCount: calibration.LeftSampleCount,
+                        RightSampleCount: calibration.RightSampleCount,
+                        LeftMedianPixelsPerMs: calibration.LeftMedianPixelsPerMs,
+                        RightMedianPixelsPerMs: calibration.RightMedianPixelsPerMs,
+                        DisplacementPx: calibration.DisplacementPx),
+                    cancellationToken);
+                VisualStationaryObservation? reanchored = observations.RecordMovement(
+                    before.Platform.CenterX.Value,
+                    after.Platform.CenterX.Value,
+                    jitter,
+                    after);
+                ObserveTrustedPosition(reanchored ?? after);
             }
             PublishVisual(sessionId, cycleId, after ?? observations.Latest, after?.Code ?? "VISUAL_FEEDBACK_TIMEOUT");
             return true;
@@ -785,11 +1211,185 @@ public sealed class VisualStationarySessionController(
             return;
         fallbackPlanner.ObserveTrustedPosition(
             observation.Platform.OffsetFromCenterPx.Value,
-            observation.Platform.GuardWidthPx);
+            observation.Platform.GuardWidthPx,
+            relativeOffsetMs);
     }
+
+    private VisualStationaryObservation SelectTrustedFeedbackAnchor(
+        VisualStationaryObservation after)
+    {
+        VisualStationaryObservation? latest = observations.Latest;
+        return latest is { IdentityTrusted: true } &&
+            latest.FrameSequence >= after.FrameSequence
+                ? latest
+                : after;
+    }
+
+    private async Task WriteCalibratedFallbackDecisionAsync(
+        Guid sessionId,
+        long cycleId,
+        MovementIntent? intent,
+        MovementSegment? segment,
+        StationaryAttackConfig config,
+        string resultCode,
+        CancellationToken cancellationToken)
+    {
+        VisualFallbackProjectionSnapshot? before = fallbackPlanner.ProjectionSnapshot;
+        VisualFallbackProjectionSnapshot? after = segment is null
+            ? before
+            : fallbackPlanner.PreviewSegment(segment.Direction, segment.HoldMs);
+        await WriteFallbackTelemetryAsync(
+            CreateCalibratedFallbackTelemetry(
+                sessionId,
+                cycleId,
+                "Decision",
+                resultCode,
+                intent,
+                segment,
+                null,
+                before,
+                after,
+                config),
+            cancellationToken);
+    }
+
+    private async Task WriteUncalibratedFallbackDecisionAsync(
+        Guid sessionId,
+        long cycleId,
+        MovementIntent intent,
+        MovementSegment? segment,
+        StationaryAttackConfig config,
+        string resultCode,
+        CancellationToken cancellationToken)
+    {
+        int beforeMs = continuousMovementPlanner.RelativeOffsetMs;
+        int afterMs = segment is null
+            ? beforeMs
+            : checked(beforeMs + (int)segment.Direction * segment.HoldMs);
+        await WriteFallbackTelemetryAsync(
+            CreateUncalibratedFallbackTelemetry(
+                sessionId,
+                cycleId,
+                "Decision",
+                resultCode,
+                intent,
+                segment,
+                null,
+                beforeMs,
+                afterMs,
+                config),
+            cancellationToken);
+    }
+
+    private VisualFallbackTelemetry CreateCalibratedFallbackTelemetry(
+        Guid sessionId,
+        long cycleId,
+        string eventName,
+        string resultCode,
+        MovementIntent? intent,
+        MovementSegment? segment,
+        int? actualHoldMs,
+        VisualFallbackProjectionSnapshot? before,
+        VisualFallbackProjectionSnapshot? after,
+        StationaryAttackConfig config) =>
+        new(
+            sessionId,
+            cycleId,
+            eventName,
+            resultCode,
+            "Calibrated",
+            Direction: segment?.Direction,
+            Intent: intent,
+            RequestedHoldMs: segment?.HoldMs,
+            ActualHoldMs: actualHoldMs,
+            OffsetBeforeMs: before?.RelativeOffsetMs,
+            OffsetAfterMs: after?.RelativeOffsetMs,
+            MaxLateralMoveMs: config.MaxLateralMoveMs,
+            OffsetBeforePx: before?.OffsetPx,
+            OffsetAfterPx: after?.OffsetPx,
+            UncertaintyBeforePx: before?.UncertaintyPx,
+            UncertaintyAfterPx: after?.UncertaintyPx,
+            UsableHalfWidthPx: before is null ? null : fallbackPlanner.UsableHalfWidthPx,
+            CandidatePixelsPerMs: segment?.Direction == MovementDirection.Left
+                ? fallbackPlanner.LeftPixelsPerMs
+                : segment?.Direction == MovementDirection.Right
+                    ? fallbackPlanner.RightPixelsPerMs
+                    : null,
+            LeftSampleCount: fallbackPlanner.LeftSampleCount,
+            RightSampleCount: fallbackPlanner.RightSampleCount,
+            LeftMedianPixelsPerMs: fallbackPlanner.LeftPixelsPerMs,
+            RightMedianPixelsPerMs: fallbackPlanner.RightPixelsPerMs,
+            BoundaryResult: GetBoundaryResult(resultCode));
+
+    private VisualFallbackTelemetry CreateUncalibratedFallbackTelemetry(
+        Guid sessionId,
+        long cycleId,
+        string eventName,
+        string resultCode,
+        MovementIntent intent,
+        MovementSegment? segment,
+        int? actualHoldMs,
+        int offsetBeforeMs,
+        int offsetAfterMs,
+        StationaryAttackConfig config) =>
+        new(
+            sessionId,
+            cycleId,
+            eventName,
+            resultCode,
+            "Uncalibrated",
+            Direction: segment?.Direction,
+            Intent: intent,
+            RequestedHoldMs: segment?.HoldMs,
+            ActualHoldMs: actualHoldMs,
+            OffsetBeforeMs: offsetBeforeMs,
+            OffsetAfterMs: offsetAfterMs,
+            MaxLateralMoveMs: config.MaxLateralMoveMs,
+            LeftSampleCount: fallbackPlanner.LeftSampleCount,
+            RightSampleCount: fallbackPlanner.RightSampleCount,
+            LeftMedianPixelsPerMs: fallbackPlanner.LeftPixelsPerMs,
+            RightMedianPixelsPerMs: fallbackPlanner.RightPixelsPerMs,
+            BoundaryResult: GetBoundaryResult(resultCode));
+
+    private static string GetBoundaryResult(string resultCode) => resultCode switch
+    {
+        "VISUAL_FALLBACK_SEGMENT_SELECTED" => "CandidateWithinDualBoundary",
+        "VISUAL_FALLBACK_SEGMENT_COMPLETED" => "CompletedWithinDualBoundary",
+        "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE" => "NoLegalCandidate",
+        "MOVEMENT_OFFSET_EXCEEDED" => "MillisecondBoundaryExceeded",
+        "VISUAL_PREDICTED_BOUNDARY_EXCEEDED" => "PixelBoundaryExceeded",
+        "VISUAL_FALLBACK_SECOND_UNAVAILABLE" => "SecondCandidateUnavailable",
+        _ => resultCode.StartsWith("VISUAL_FALLBACK", StringComparison.Ordinal)
+            ? "FallbackDecision"
+            : resultCode
+    };
+
+    private VisualFallbackProjectionSnapshot RequireFallbackProjection() =>
+        fallbackPlanner.ProjectionSnapshot ??
+        throw new VisualSessionStopException("VISUAL_FALLBACK_NOT_ACTIVE");
+
+    private static bool IsValidMovementTiming(InputActionResult result) =>
+        HasValidActualHold(result.ActualHoldMs) &&
+        result.ReleaseLatenessMs is >= 0;
+
+    private static bool HasValidActualHold(int? actualHoldMs) =>
+        actualHoldMs is >= 1 and <= StationaryAttackConfig.MovementDurationLimitMs;
 
     private static StationaryInputAction ToInputAction(MovementDirection direction) =>
         direction == MovementDirection.Left ? StationaryInputAction.MoveLeft : StationaryInputAction.MoveRight;
+
+    private async Task WriteFallbackTelemetryAsync(
+        VisualFallbackTelemetry telemetry,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await fallbackTelemetry.WriteAsync(telemetry, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+        }
+    }
 
     private sealed class VisualSessionStopException(string code) : Exception(code)
     {

@@ -55,6 +55,7 @@ public sealed class VisualFallbackMovementPlanner(IRandomSource random, int plat
         : null;
     public double? LeftPixelsPerMs => Median(leftSamples);
     public double? RightPixelsPerMs => Median(rightSamples);
+    public double UsableHalfWidthPx => platformWidthPx / 2d - guardWidthPx;
     public MovementDirection InitialFacing { get; private set; }
 
     public VisualFallbackCalibrationResult RecordTrustedMovement(
@@ -123,9 +124,11 @@ public sealed class VisualFallbackMovementPlanner(IRandomSource random, int plat
         estimate = Apply(estimate.Value, direction, actualHoldMs, includeTimeOffset: false);
     }
 
-    public bool TryStartFallback(MovementDirection initialFacing)
+    public bool TryStartFallback(MovementDirection initialFacing, int? relativeOffsetMs = null)
     {
         if (!IsCalibrated || estimate is null || !IsInsidePixelBoundary(estimate.Value)) return false;
+        if (relativeOffsetMs.HasValue)
+            estimate = estimate.Value with { RelativeOffsetMs = relativeOffsetMs.Value };
         InitialFacing = initialFacing;
         IsFallbackActive = true;
         returnTowardCenterRequired = false;
@@ -211,6 +214,17 @@ public sealed class VisualFallbackMovementPlanner(IRandomSource random, int plat
         Projection current = RequireActive();
         returnTowardCenterRequired = cycle.Intent == MovementIntent.ReturnTowardCenter &&
             Math.Abs(current.OffsetPx) > Math.Abs(cycle.StartOffsetPx);
+    }
+
+    public VisualFallbackProjectionSnapshot PreviewSegment(
+        MovementDirection direction,
+        int holdMs)
+    {
+        Projection projected = Apply(RequireActive(), direction, holdMs, includeTimeOffset: true);
+        return new VisualFallbackProjectionSnapshot(
+            projected.OffsetPx,
+            projected.UncertaintyPx,
+            projected.RelativeOffsetMs);
     }
 
     private bool LeavesLegalSecondForAllowedActualRange(
@@ -322,8 +336,6 @@ public sealed class VisualFallbackMovementPlanner(IRandomSource random, int plat
     private double Rate(MovementDirection direction) =>
         (direction == MovementDirection.Left ? LeftPixelsPerMs : RightPixelsPerMs) ??
         throw new InvalidOperationException("VISUAL_FALLBACK_NOT_CALIBRATED");
-
-    private double UsableHalfWidthPx => platformWidthPx / 2d - guardWidthPx;
 
     private MovementDirection FirstDirection() =>
         InitialFacing == MovementDirection.Left ? MovementDirection.Right : MovementDirection.Left;

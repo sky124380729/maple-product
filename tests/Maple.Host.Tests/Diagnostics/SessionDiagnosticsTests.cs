@@ -48,6 +48,7 @@ public sealed class SessionDiagnosticsTests
             "uncertaintyAfterPx",
             "usableHalfWidthPx",
             "candidatePixelsPerMs",
+            "displacementPx",
             "leftSampleCount",
             "rightSampleCount",
             "leftMedianPixelsPerMs",
@@ -149,6 +150,7 @@ public sealed class SessionDiagnosticsTests
                 UncertaintyAfterPx: 4.75,
                 UsableHalfWidthPx: 118.0,
                 CandidatePixelsPerMs: 0.35,
+                DisplacementPx: 16.75,
                 LeftSampleCount: 3,
                 RightSampleCount: 4,
                 LeftMedianPixelsPerMs: 0.31,
@@ -165,6 +167,7 @@ public sealed class SessionDiagnosticsTests
         Assert.Equal(4.75, root.GetProperty("uncertaintyAfterPx").GetDouble());
         Assert.Equal(118.0, root.GetProperty("usableHalfWidthPx").GetDouble());
         Assert.Equal(0.35, root.GetProperty("candidatePixelsPerMs").GetDouble());
+        Assert.Equal(16.75, root.GetProperty("displacementPx").GetDouble());
         Assert.Equal(3, root.GetProperty("leftSampleCount").GetInt32());
         Assert.Equal(4, root.GetProperty("rightSampleCount").GetInt32());
         Assert.Equal(0.31, root.GetProperty("leftMedianPixelsPerMs").GetDouble());
@@ -198,6 +201,7 @@ public sealed class SessionDiagnosticsTests
                 UncertaintyAfterPx: 7.5,
                 UsableHalfWidthPx: 118.0,
                 CandidatePixelsPerMs: 0.38,
+                DisplacementPx: -18.25,
                 LeftSampleCount: 5,
                 RightSampleCount: 6,
                 LeftMedianPixelsPerMs: 0.36,
@@ -224,10 +228,36 @@ public sealed class SessionDiagnosticsTests
         Assert.Equal(7.5, entry.UncertaintyAfterPx);
         Assert.Equal(118.0, entry.UsableHalfWidthPx);
         Assert.Equal(0.38, entry.CandidatePixelsPerMs);
+        Assert.Equal(-18.25, entry.DisplacementPx);
         Assert.Equal(5, entry.LeftSampleCount);
         Assert.Equal(6, entry.RightSampleCount);
         Assert.Equal(0.36, entry.LeftMedianPixelsPerMs);
         Assert.Equal(0.39, entry.RightMedianPixelsPerMs);
+    }
+
+    [Fact]
+    public void Older_session_log_json_without_displacement_remains_readable()
+    {
+        Guid sessionId = Guid.NewGuid();
+        string json = $$"""
+            {
+              "timestampUtc": "2026-08-26T00:00:00+00:00",
+              "sessionId": "{{sessionId}}",
+              "cycleId": 4,
+              "phase": "VisualFallback",
+              "event": "Calibration",
+              "resultCode": "VISUAL_CALIBRATION_ACCEPTED",
+              "candidatePixelsPerMs": 0.5
+            }
+            """;
+
+        SessionLogEntry? entry = JsonSerializer.Deserialize<SessionLogEntry>(
+            json,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.NotNull(entry);
+        Assert.Equal(sessionId, entry.SessionId);
+        Assert.Null(entry.DisplacementPx);
     }
 
     [Fact]

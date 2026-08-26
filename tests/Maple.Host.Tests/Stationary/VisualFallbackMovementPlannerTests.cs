@@ -148,6 +148,26 @@ public sealed class VisualFallbackMovementPlannerTests
     }
 
     [Fact]
+    public void Previewing_a_segment_reports_the_projection_without_mutating_planner_state()
+    {
+        VisualFallbackMovementPlanner planner = Calibrated(new MinimumRandom());
+        planner.ObserveTrustedPosition(offsetPx: 5, guardWidthPx: 48, relativeOffsetMs: 7);
+        Assert.True(planner.TryStartFallback(MovementDirection.Right));
+
+        VisualFallbackProjectionSnapshot preview = planner.PreviewSegment(MovementDirection.Left, 40);
+        VisualFallbackProjectionSnapshot current = Assert.IsType<VisualFallbackProjectionSnapshot>(
+            planner.ProjectionSnapshot);
+
+        Assert.Equal(-16, preview.OffsetPx, 3);
+        Assert.Equal(7.25, preview.UncertaintyPx, 3);
+        Assert.Equal(-33, preview.RelativeOffsetMs);
+        Assert.Equal(5, current.OffsetPx);
+        Assert.Equal(2, current.UncertaintyPx);
+        Assert.Equal(7, current.RelativeOffsetMs);
+        Assert.Equal(90, planner.UsableHalfWidthPx);
+    }
+
+    [Fact]
     public void Requires_two_valid_samples_per_direction_and_uses_direction_medians()
     {
         var planner = new VisualFallbackMovementPlanner(new MinimumRandom(), platformWidthPx: 276);

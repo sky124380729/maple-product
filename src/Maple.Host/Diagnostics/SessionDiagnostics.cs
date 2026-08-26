@@ -41,7 +41,11 @@ public sealed record SessionLogEntry(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     double? LeftMedianPixelsPerMs = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    double? RightMedianPixelsPerMs = null)
+    double? RightMedianPixelsPerMs = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? DisplacementPx = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? BoundaryResult = null)
 {
     public static SessionLogEntry Create(
         Guid sessionId,

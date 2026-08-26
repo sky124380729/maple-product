@@ -22,22 +22,61 @@ public sealed class VisualStationarySessionControllerTests
     }
 
     [Fact]
-    public async Task Fifteen_seconds_of_identity_loss_without_calibration_uses_ordinary_random_movement()
+    public async Task Uncalibrated_fallback_limits_random_holds_to_the_conservative_lower_half()
     {
         var actions = new RecordingActions();
+        var telemetry = new RecordingVisualFallbackTelemetrySink();
         var observations = new FakeObservations(State(VisualSafetyState.Untrusted, sequence: 3, x: null))
         {
             ContinuouslyUntrustedForFallback = true
         };
-        VisualStationarySessionController controller = Create(actions, observations, new MinimumRandom());
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MaximumRandom(),
+            telemetrySink: telemetry);
 
         await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, CancellationToken.None);
 
         Assert.Equal(
             ["Down:Attack", "Up:Attack", "Down:MoveLeft", "Up:MoveLeft", "Down:MoveRight", "Up:MoveRight", "ReleaseAll"],
             actions.Events);
+        Assert.Equal([40, 40], actions.Leases.Where(lease => lease > 1));
+        Assert.Equal(2, telemetry.Events.Count(item => item.Event == "Decision"));
+        Assert.Equal(2, telemetry.Events.Count(item => item.Event == "Completed"));
+        Assert.All(telemetry.Events, item => Assert.Equal("Uncalibrated", item.PlannerKind));
         Assert.Equal(1, observations.MovementTrackingStarts);
         Assert.Equal(1, observations.MovementTrackingEnds);
+    }
+
+    [Fact]
+    public async Task Uncalibrated_fallback_freezes_the_remaining_cycle_when_actual_first_hold_exhausts_the_second_segment()
+    {
+        var actions = new RecordingActions();
+        actions.DirectionActualHolds.Enqueue(70);
+        var observations = new FakeObservations(State(VisualSafetyState.Untrusted, 3, null))
+        {
+            ContinuouslyUntrustedForFallback = true
+        };
+        var telemetry = new RecordingVisualFallbackTelemetrySink();
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            telemetrySink: telemetry);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, CancellationToken.None);
+
+        Assert.Equal(2, actions.Events.Count(item => item == "Down:Attack"));
+        Assert.Equal(
+            ["Down:MoveLeft", "Down:MoveRight"],
+            actions.Events.Where(item => item.StartsWith("Down:Move", StringComparison.Ordinal)));
+        Assert.Contains(telemetry.Events, item =>
+            item.CycleId == 1 &&
+            item.Event == "Decision" &&
+            item.PlannerKind == "Uncalibrated" &&
+            item.ResultCode == "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE" &&
+            item.Direction is null);
     }
 
     [Fact]
@@ -70,14 +109,17 @@ public sealed class VisualStationarySessionControllerTests
     }
 
     [Fact]
-    public async Task Fifteen_seconds_of_identity_loss_with_calibration_still_uses_ordinary_random_pair()
+    public async Task Calibrated_fallback_applies_actual_segments_to_the_dual_boundary_planner()
     {
         var actions = new RecordingActions();
+        actions.DirectionActualHolds.Enqueue(40);
+        actions.DirectionActualHolds.Enqueue(34);
         var observations = new FakeObservations(State(VisualSafetyState.Untrusted, sequence: 3, x: null))
         {
             ContinuouslyUntrustedForFallback = true
         };
         var visualPublisher = new RecordingVisualPublisher();
+        var telemetry = new RecordingVisualFallbackTelemetrySink();
         VisualFallbackMovementPlanner fallback = CalibratedFallback(new MinimumRandom());
         fallback.ObserveTrustedPosition(0, 48);
         VisualStationarySessionController controller = Create(
@@ -85,17 +127,411 @@ public sealed class VisualStationarySessionControllerTests
             observations,
             new MinimumRandom(),
             visualPublisher: visualPublisher,
-            fallbackPlanner: fallback);
+            fallbackPlanner: fallback,
+            telemetrySink: telemetry);
 
         await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, CancellationToken.None);
 
         Assert.Equal(
             ["Down:Attack", "Up:Attack", "Down:MoveLeft", "Up:MoveLeft", "Down:MoveRight", "Up:MoveRight", "ReleaseAll"],
             actions.Events);
+        VisualFallbackProjectionSnapshot projection = Assert.IsType<VisualFallbackProjectionSnapshot>(
+            fallback.ProjectionSnapshot);
+        Assert.Equal(-6, projection.RelativeOffsetMs);
+        Assert.True(Math.Abs(projection.OffsetPx) + projection.UncertaintyPx <= 90);
         Assert.Contains(visualPublisher.States, state =>
             state.Status == "FallbackContinuous" &&
             state.Code == "VISUAL_FALLBACK_CONTINUOUS" &&
             state.VisualOffsetPx.HasValue);
+    }
+
+    [Fact]
+    public async Task Calibrated_fallback_without_a_dual_boundary_candidate_freezes_movement_but_keeps_attacking()
+    {
+        var actions = new RecordingActions();
+        var observations = new FakeObservations(State(VisualSafetyState.Untrusted, sequence: 3, x: null))
+        {
+            ContinuouslyUntrustedForFallback = true
+        };
+        var visualPublisher = new RecordingVisualPublisher();
+        var telemetry = new RecordingVisualFallbackTelemetrySink();
+        VisualFallbackMovementPlanner fallback = FastCalibratedFallback(new MinimumRandom());
+        fallback.ObserveTrustedPosition(0, 48);
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            visualPublisher: visualPublisher,
+            fallbackPlanner: fallback,
+            telemetrySink: telemetry);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, CancellationToken.None);
+
+        Assert.Equal(2, actions.Events.Count(item => item == "Down:Attack"));
+        Assert.DoesNotContain(actions.Events, item => item.StartsWith("Down:Move", StringComparison.Ordinal));
+        Assert.Contains(visualPublisher.States, state =>
+            state.Code == "VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE");
+        VisualFallbackTelemetry[] frozen = telemetry.Events
+            .Where(item => item.Event == "Decision")
+            .ToArray();
+        Assert.Equal(2, frozen.Length);
+        Assert.All(frozen, item =>
+        {
+            Assert.Equal("Calibrated", item.PlannerKind);
+            Assert.Equal("VISUAL_FALLBACK_FROZEN_NO_SAFE_MOVE", item.ResultCode);
+            Assert.Null(item.Direction);
+            Assert.Null(item.RequestedHoldMs);
+            Assert.NotNull(item.OffsetBeforePx);
+        });
+    }
+
+    [Fact]
+    public async Task Trusted_feedback_reanchors_pixels_without_resetting_the_accumulated_time_offset()
+    {
+        var actions = new RecordingActions();
+        actions.DirectionActualHolds.Enqueue(40);
+        actions.DirectionActualHolds.Enqueue(34);
+        var observations = new FakeObservations(
+            State(VisualSafetyState.Safe, 10, 300),
+            State(VisualSafetyState.Safe, 12, 280),
+            State(VisualSafetyState.Safe, 14, 297));
+        VisualFallbackMovementPlanner fallback = CalibratedFallback(new MinimumRandom());
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            fallbackPlanner: fallback);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, CancellationToken.None);
+
+        VisualFallbackProjectionSnapshot projection = Assert.IsType<VisualFallbackProjectionSnapshot>(
+            fallback.ProjectionSnapshot);
+        Assert.Equal(-3, projection.OffsetPx);
+        Assert.Equal(-6, projection.RelativeOffsetMs);
+    }
+
+    [Fact]
+    public async Task Trusted_feedback_reanchors_from_the_returned_after_snapshot_when_latest_races_to_untrusted()
+    {
+        var actions = new RecordingActions();
+        var observations = new FakeObservations(
+            State(VisualSafetyState.GuardLeft, 10, 120),
+            State(VisualSafetyState.Safe, 12, 155));
+        observations.TrustedWaitReturning = _ =>
+            observations.SetLatest(State(VisualSafetyState.Untrusted, 13, null));
+        VisualFallbackMovementPlanner fallback = new(new MinimumRandom(), platformWidthPx: 276);
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            fallbackPlanner: fallback);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, CancellationToken.None);
+
+        VisualFallbackProjectionSnapshot projection = Assert.IsType<VisualFallbackProjectionSnapshot>(
+            fallback.ProjectionSnapshot);
+        Assert.Equal(-145, projection.OffsetPx);
+        Assert.Equal(34, projection.RelativeOffsetMs);
+    }
+
+    [Fact]
+    public async Task Trusted_feedback_reanchors_from_the_updated_trusted_snapshot_published_by_record_movement()
+    {
+        var actions = new RecordingActions();
+        var observations = new FakeObservations(
+            State(VisualSafetyState.GuardLeft, 10, 120),
+            State(VisualSafetyState.Safe, 12, 155));
+        observations.MovementRecorded = () =>
+            observations.SetLatest(State(VisualSafetyState.Safe, 13, 156, guardWidthPx: 35));
+        VisualFallbackMovementPlanner fallback = new(new MinimumRandom(), platformWidthPx: 276);
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            fallbackPlanner: fallback);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, CancellationToken.None);
+
+        VisualFallbackProjectionSnapshot projection = Assert.IsType<VisualFallbackProjectionSnapshot>(
+            fallback.ProjectionSnapshot);
+        Assert.Equal(-144, projection.OffsetPx);
+        Assert.Equal(34, projection.RelativeOffsetMs);
+        Assert.Equal(103, fallback.UsableHalfWidthPx);
+    }
+
+    [Fact]
+    public async Task Visual_recovery_reanchors_real_pixels_and_the_current_accumulated_time_offset()
+    {
+        var actions = new RecordingActions();
+        actions.DirectionActualHolds.Enqueue(40);
+        actions.DirectionActualHolds.Enqueue(34);
+        var observations = new FakeObservations(State(VisualSafetyState.Untrusted, 3, null))
+        {
+            ContinuouslyUntrustedForFallback = true
+        };
+        int directionReleases = 0;
+        actions.DirectionalKeyReleased = () =>
+        {
+            if (++directionReleases == 2)
+                observations.SetLatest(State(VisualSafetyState.Outside, 10, 320));
+        };
+        VisualFallbackMovementPlanner fallback = CalibratedFallback(new MinimumRandom());
+        fallback.ObserveTrustedPosition(0, 48);
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            fallbackPlanner: fallback);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, CancellationToken.None);
+
+        VisualFallbackProjectionSnapshot projection = Assert.IsType<VisualFallbackProjectionSnapshot>(
+            fallback.ProjectionSnapshot);
+        Assert.Equal(20, projection.OffsetPx);
+        Assert.Equal(-6, projection.RelativeOffsetMs);
+        Assert.False(fallback.IsFallbackActive);
+    }
+
+    [Fact]
+    public async Task Trusted_movement_calibration_records_accepted_and_rejected_feedback_with_actual_timing()
+    {
+        var actions = new RecordingActions();
+        actions.DirectionActualHolds.Enqueue(40);
+        actions.DirectionActualHolds.Enqueue(35);
+        var observations = new FakeObservations(
+            State(VisualSafetyState.Safe, 10, 300),
+            State(VisualSafetyState.Safe, 12, 280),
+            State(VisualSafetyState.Safe, 14, 278));
+        var telemetry = new RecordingVisualFallbackTelemetrySink();
+        var rhythm = new RecordingRhythmPublisher();
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            telemetrySink: telemetry);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, CancellationToken.None);
+
+        VisualFallbackTelemetry[] calibration = telemetry.Events
+            .Where(item => item.Event == "Calibration")
+            .ToArray();
+        Assert.Collection(
+            calibration,
+            accepted =>
+            {
+                Assert.Equal("VISUAL_CALIBRATION_ACCEPTED", accepted.ResultCode);
+                Assert.Equal(MovementDirection.Left, accepted.Direction);
+                Assert.Equal(34, accepted.RequestedHoldMs);
+                Assert.Equal(40, accepted.ActualHoldMs);
+                Assert.Equal(300, accepted.OffsetBeforePx);
+                Assert.Equal(280, accepted.OffsetAfterPx);
+                Assert.Equal(0.5, accepted.CandidatePixelsPerMs);
+                Assert.Equal(20, accepted.DisplacementPx);
+                Assert.Equal(1, accepted.LeftSampleCount);
+                Assert.Equal(0, accepted.RightSampleCount);
+                Assert.Equal(0.5, accepted.LeftMedianPixelsPerMs);
+                Assert.Null(accepted.RightMedianPixelsPerMs);
+            },
+            rejected =>
+            {
+                Assert.Equal("VISUAL_CALIBRATION_DISPLACEMENT_INVALID", rejected.ResultCode);
+                Assert.Equal(MovementDirection.Right, rejected.Direction);
+                Assert.Equal(34, rejected.RequestedHoldMs);
+                Assert.Equal(35, rejected.ActualHoldMs);
+                Assert.Equal(280, rejected.OffsetBeforePx);
+                Assert.Equal(278, rejected.OffsetAfterPx);
+                Assert.True(rejected.CandidatePixelsPerMs < 0);
+                Assert.Equal(-2, rejected.DisplacementPx);
+                Assert.Equal(1, rejected.LeftSampleCount);
+                Assert.Equal(0, rejected.RightSampleCount);
+            });
+    }
+
+    [Fact]
+    public async Task Calibrated_fallback_records_each_selected_and_completed_segment_with_dual_boundary_projections()
+    {
+        var actions = new RecordingActions();
+        actions.DirectionActualHolds.Enqueue(40);
+        actions.DirectionActualHolds.Enqueue(34);
+        var observations = new FakeObservations(State(VisualSafetyState.Untrusted, 3, null))
+        {
+            ContinuouslyUntrustedForFallback = true
+        };
+        var telemetry = new RecordingVisualFallbackTelemetrySink();
+        var rhythm = new RecordingRhythmPublisher();
+        VisualFallbackMovementPlanner fallback = CalibratedFallback(new MinimumRandom());
+        fallback.ObserveTrustedPosition(0, 48);
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            fallbackPlanner: fallback,
+            telemetrySink: telemetry,
+            rhythmPublisher: rhythm);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, CancellationToken.None);
+
+        VisualFallbackTelemetry[] decisions = telemetry.Events
+            .Where(item => item.Event == "Decision")
+            .ToArray();
+        VisualFallbackTelemetry[] completed = telemetry.Events
+            .Where(item => item.Event == "Completed")
+            .ToArray();
+        Assert.Equal(2, decisions.Length);
+        Assert.Equal(2, completed.Length);
+        Assert.Equal([MovementDirection.Left, MovementDirection.Right], decisions.Select(item => item.Direction));
+        Assert.Equal([40, 34], completed.Select(item => item.ActualHoldMs));
+        Assert.Equal(-40, completed[0].OffsetAfterMs);
+        Assert.Equal(-6, completed[1].OffsetAfterMs);
+        Assert.All(decisions.Concat(completed), item =>
+        {
+            Assert.Equal("Calibrated", item.PlannerKind);
+            Assert.Equal(MovementIntent.Unbiased, item.Intent);
+            Assert.NotNull(item.RequestedHoldMs);
+            Assert.NotNull(item.OffsetBeforeMs);
+            Assert.NotNull(item.OffsetAfterMs);
+            Assert.NotNull(item.OffsetBeforePx);
+            Assert.NotNull(item.OffsetAfterPx);
+            Assert.NotNull(item.UncertaintyBeforePx);
+            Assert.NotNull(item.UncertaintyAfterPx);
+            Assert.Equal(90, item.UsableHalfWidthPx);
+            Assert.Equal(80, item.MaxLateralMoveMs);
+            Assert.Equal(2, item.LeftSampleCount);
+            Assert.Equal(2, item.RightSampleCount);
+            Assert.NotNull(item.LeftMedianPixelsPerMs);
+            Assert.NotNull(item.RightMedianPixelsPerMs);
+        });
+    }
+
+    [Fact]
+    public async Task Calibrated_fallback_records_completed_telemetry_before_stopping_on_boundary_failure()
+    {
+        var actions = new RecordingActions();
+        actions.DirectionActualHolds.Enqueue(150);
+        var observations = new FakeObservations(State(VisualSafetyState.Untrusted, 3, null))
+        {
+            ContinuouslyUntrustedForFallback = true
+        };
+        var telemetry = new RecordingVisualFallbackTelemetrySink();
+        var rhythm = new RecordingRhythmPublisher();
+        VisualFallbackMovementPlanner fallback = CalibratedFallback(new MinimumRandom());
+        fallback.ObserveTrustedPosition(0, 48);
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            fallbackPlanner: fallback,
+            telemetrySink: telemetry,
+            rhythmPublisher: rhythm);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, CancellationToken.None);
+
+        Assert.Contains("Down:MoveLeft", actions.Events);
+        Assert.Contains("Up:MoveLeft", actions.Events);
+        Assert.Equal(1, actions.Events.Count(item => item == "Down:Attack"));
+        Assert.Equal("ReleaseAll", actions.Events[^1]);
+        VisualFallbackTelemetry completed = Assert.Single(
+            telemetry.Events,
+            item => item.Event == "Completed");
+        Assert.Equal("MOVEMENT_OFFSET_EXCEEDED", completed.ResultCode);
+        Assert.Equal("Calibrated", completed.PlannerKind);
+        Assert.Equal(150, completed.ActualHoldMs);
+        Assert.Equal(0, completed.OffsetBeforeMs);
+        Assert.Equal(-150, completed.OffsetAfterMs);
+        Assert.Equal(0, completed.OffsetBeforePx);
+        Assert.NotEqual(completed.OffsetBeforePx, completed.OffsetAfterPx);
+        Assert.NotNull(completed.UncertaintyAfterPx);
+        Assert.Equal(-150, rhythm.States[^1].RelativeOffsetMs);
+        Assert.Equal(StationaryPhase.Stopped, rhythm.States[^1].Phase);
+    }
+
+    [Fact]
+    public async Task Calibrated_fallback_records_completed_telemetry_before_stopping_on_invalid_timing()
+    {
+        var actions = new RecordingActions();
+        actions.DirectionActualHolds.Enqueue(40);
+        actions.DirectionReleaseLateness.Enqueue(null);
+        var observations = new FakeObservations(State(VisualSafetyState.Untrusted, 3, null))
+        {
+            ContinuouslyUntrustedForFallback = true
+        };
+        var telemetry = new RecordingVisualFallbackTelemetrySink();
+        VisualFallbackMovementPlanner fallback = CalibratedFallback(new MinimumRandom());
+        fallback.ObserveTrustedPosition(0, 48);
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            fallbackPlanner: fallback,
+            telemetrySink: telemetry);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, CancellationToken.None);
+
+        Assert.Contains("Down:MoveLeft", actions.Events);
+        Assert.Contains("Up:MoveLeft", actions.Events);
+        Assert.Equal("ReleaseAll", actions.Events[^1]);
+        VisualFallbackTelemetry completed = Assert.Single(
+            telemetry.Events,
+            item => item.Event == "Completed");
+        Assert.Equal("MOVEMENT_TIMING_INVALID", completed.ResultCode);
+        Assert.Equal(40, completed.ActualHoldMs);
+        Assert.Equal(-40, completed.OffsetAfterMs);
+        Assert.NotEqual(completed.OffsetBeforePx, completed.OffsetAfterPx);
+        Assert.NotEqual(completed.UncertaintyBeforePx, completed.UncertaintyAfterPx);
+    }
+
+    [Fact]
+    public async Task Uncalibrated_fallback_records_completed_telemetry_before_stopping_on_boundary_failure()
+    {
+        var actions = new RecordingActions();
+        actions.DirectionActualHolds.Enqueue(150);
+        var observations = new FakeObservations(State(VisualSafetyState.Untrusted, 3, null))
+        {
+            ContinuouslyUntrustedForFallback = true
+        };
+        var telemetry = new RecordingVisualFallbackTelemetrySink();
+        var rhythm = new RecordingRhythmPublisher();
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            telemetrySink: telemetry,
+            rhythmPublisher: rhythm);
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 2, CancellationToken.None);
+
+        Assert.Equal("ReleaseAll", actions.Events[^1]);
+        VisualFallbackTelemetry completed = Assert.Single(
+            telemetry.Events,
+            item => item.Event == "Completed");
+        Assert.Equal("MOVEMENT_OFFSET_EXCEEDED", completed.ResultCode);
+        Assert.Equal("Uncalibrated", completed.PlannerKind);
+        Assert.Equal(150, completed.ActualHoldMs);
+        Assert.Equal(0, completed.OffsetBeforeMs);
+        Assert.Equal(-150, completed.OffsetAfterMs);
+        Assert.Equal(-150, rhythm.States[^1].RelativeOffsetMs);
+        Assert.Equal(StationaryPhase.Stopped, rhythm.States[^1].Phase);
+    }
+
+    [Fact]
+    public async Task Telemetry_failure_does_not_interrupt_fallback_attack_or_movement()
+    {
+        var actions = new RecordingActions();
+        var observations = new FakeObservations(State(VisualSafetyState.Untrusted, 3, null))
+        {
+            ContinuouslyUntrustedForFallback = true
+        };
+        VisualStationarySessionController controller = Create(
+            actions,
+            observations,
+            new MinimumRandom(),
+            telemetrySink: new ThrowingVisualFallbackTelemetrySink());
+
+        await controller.RunAsync(Guid.NewGuid(), MovementDirection.Right, cycleLimit: 1, CancellationToken.None);
+
+        Assert.Equal(
+            ["Down:Attack", "Up:Attack", "Down:MoveLeft", "Up:MoveLeft", "Down:MoveRight", "Up:MoveRight", "ReleaseAll"],
+            actions.Events);
     }
 
     [Fact]
@@ -628,7 +1064,8 @@ public sealed class VisualStationarySessionControllerTests
         RecordingVisualPublisher? visualPublisher = null,
         VisualFallbackMovementPlanner? fallbackPlanner = null,
         StationaryAttackConfig? config = null,
-        RecordingRhythmPublisher? rhythmPublisher = null)
+        RecordingRhythmPublisher? rhythmPublisher = null,
+        IVisualFallbackTelemetrySink? telemetrySink = null)
     {
         config ??= TestConfig();
         return new VisualStationarySessionController(
@@ -642,7 +1079,8 @@ public sealed class VisualStationarySessionControllerTests
             observations,
             random,
             rhythmPublisher ?? new RecordingRhythmPublisher(),
-            visualPublisher ?? new RecordingVisualPublisher());
+            visualPublisher ?? new RecordingVisualPublisher(),
+            telemetrySink ?? new NullVisualFallbackTelemetrySink());
     }
 
     private static StationaryAttackConfig TestConfig() => StationaryAttackConfig.Default with
@@ -674,11 +1112,22 @@ public sealed class VisualStationarySessionControllerTests
         return planner;
     }
 
+    private static VisualFallbackMovementPlanner FastCalibratedFallback(IRandomSource random)
+    {
+        var planner = new VisualFallbackMovementPlanner(random, platformWidthPx: 276);
+        planner.RecordTrustedMovement(MovementDirection.Left, 10, 100, 75);
+        planner.RecordTrustedMovement(MovementDirection.Left, 10, 100, 75);
+        planner.RecordTrustedMovement(MovementDirection.Right, 10, 100, 125);
+        planner.RecordTrustedMovement(MovementDirection.Right, 10, 100, 125);
+        return planner;
+    }
+
     private static VisualStationaryObservation State(
         VisualSafetyState state,
         long sequence,
         double? x,
-        string? code = null) =>
+        string? code = null,
+        int guardWidthPx = 32) =>
         new(
             sequence,
             sequence * 10,
@@ -689,7 +1138,7 @@ public sealed class VisualStationarySessionControllerTests
                 sequence,
                 x,
                 0.98,
-                32,
+                guardWidthPx,
                 x.HasValue ? (int)(x.Value - 300) : null,
                 code ?? (state == VisualSafetyState.Untrusted ? "VISUAL_NAME_SCORE_LOW" : state.ToString())),
             code ?? (state == VisualSafetyState.Untrusted ? "VISUAL_NAME_SCORE_LOW" : state.ToString()));
@@ -711,6 +1160,8 @@ public sealed class VisualStationarySessionControllerTests
         public HashSet<int> CancelAuthorizationReads { get; } = [];
         public HashSet<int> TimeoutWaitCalls { get; } = [];
         public Action<int>? WaitStarted { get; init; }
+        public Action<VisualStationaryObservation>? TrustedWaitReturning { get; set; }
+        public Action? MovementRecorded { get; set; }
         public VisualMovementAuthorization? TryAcquireMovementAuthorization(
             MovementDirection direction,
             TimeSpan maximumAge)
@@ -756,11 +1207,21 @@ public sealed class VisualStationarySessionControllerTests
             cancellationToken.ThrowIfCancellationRequested();
             if (TimeoutWaitCalls.Contains(call)) return Task.FromResult<VisualStationaryObservation?>(null);
             if (remaining.Count == 0) return Task.FromResult<VisualStationaryObservation?>(null);
-            Latest = remaining.Dequeue();
-            return Task.FromResult<VisualStationaryObservation?>(Latest);
+            VisualStationaryObservation result = remaining.Dequeue();
+            Latest = result;
+            TrustedWaitReturning?.Invoke(result);
+            return Task.FromResult<VisualStationaryObservation?>(result);
         }
 
-        public void RecordMovement(double beforeX, double afterX, double jitterPx) { }
+        public VisualStationaryObservation? RecordMovement(
+            double beforeX,
+            double afterX,
+            double jitterPx,
+            VisualStationaryObservation? trustedAnchor = null)
+        {
+            MovementRecorded?.Invoke();
+            return Latest is { IdentityTrusted: true } current ? current : trustedAnchor;
+        }
 
         private static bool IsDirectionAllowed(VisualSafetyState state, MovementDirection direction) =>
             state == VisualSafetyState.Safe ||
@@ -784,6 +1245,7 @@ public sealed class VisualStationarySessionControllerTests
         public Action? DirectionalKeyPressed { get; set; }
         public Action? DirectionalKeyReleased { get; set; }
         public Queue<int> DirectionActualHolds { get; } = [];
+        public Queue<int?> DirectionReleaseLateness { get; } = [];
 
         public Task<InputActionResult> KeyDownAsync(StationaryInputAction action, int leaseMs, CancellationToken cancellationToken)
         {
@@ -805,7 +1267,7 @@ public sealed class VisualStationarySessionControllerTests
                 ? InputActionResult.Ok(
                     "OK",
                     DirectionActualHolds.Count > 0 ? DirectionActualHolds.Dequeue() : active[action],
-                    0)
+                    DirectionReleaseLateness.Count > 0 ? DirectionReleaseLateness.Dequeue() : 0)
                 : InputActionResult.Ok("OK"));
         }
 
@@ -866,6 +1328,23 @@ public sealed class VisualStationarySessionControllerTests
         public void Publish(VisualStationaryRuntimeState state) => States.Add(state);
     }
 
+    private sealed class RecordingVisualFallbackTelemetrySink : IVisualFallbackTelemetrySink
+    {
+        public List<VisualFallbackTelemetry> Events { get; } = [];
+
+        public Task WriteAsync(VisualFallbackTelemetry telemetry, CancellationToken cancellationToken)
+        {
+            Events.Add(telemetry);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingVisualFallbackTelemetrySink : IVisualFallbackTelemetrySink
+    {
+        public Task WriteAsync(VisualFallbackTelemetry telemetry, CancellationToken cancellationToken) =>
+            throw new IOException("telemetry unavailable");
+    }
+
     private sealed class SequenceRandom(params int[] values) : IRandomSource
     {
         private readonly Queue<int> remaining = new(values);
@@ -880,5 +1359,10 @@ public sealed class VisualStationarySessionControllerTests
     private sealed class MinimumRandom : IRandomSource
     {
         public int NextInclusive(int minimum, int maximum) => minimum;
+    }
+
+    private sealed class MaximumRandom : IRandomSource
+    {
+        public int NextInclusive(int minimum, int maximum) => maximum;
     }
 }

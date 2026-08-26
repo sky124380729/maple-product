@@ -159,7 +159,8 @@ public partial class MainWindow
             observation,
             random,
             rhythmPublisher,
-            visualPublisher);
+            visualPublisher,
+            new SessionLogVisualFallbackTelemetrySink(sessionLog));
         Task runTask = Task.Run(async () =>
         {
             try
