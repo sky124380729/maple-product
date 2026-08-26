@@ -5,6 +5,7 @@ namespace Maple.Host.Stationary;
 public sealed class SelfAppearanceTemplateMatcher
 {
     private const int MaximumSamplesPerTemplate = 128;
+    private const int RefinementRadiusPx = 2;
     private const double StructureCorrelationWeight = 0.12;
     private IReadOnlyList<byte[]>? cachedTemplates;
     private int cachedWidth;
@@ -16,10 +17,12 @@ public sealed class SelfAppearanceTemplateMatcher
         IReadOnlyList<byte[]> templates,
         int templateWidth,
         int templateHeight,
-        FrameRect searchArea)
+        FrameRect searchArea,
+        int coarseSampleLimit = 0)
     {
         if (templates is null || templates.Count is < 1 or > 8 ||
             templateWidth <= 0 || templateHeight <= 0 ||
+            coarseSampleLimit is < 0 or > MaximumSamplesPerTemplate ||
             !searchArea.IsInside(frame.Width, frame.Height) ||
             templateWidth > searchArea.Width || templateHeight > searchArea.Height)
             return Missing(frame.Sequence, "VISUAL_CHARACTER_TEMPLATE_INVALID");
@@ -28,23 +31,51 @@ public sealed class SelfAppearanceTemplateMatcher
         if (sampleBanks.Length == 0)
             return Missing(frame.Sequence, "VISUAL_CHARACTER_TEMPLATE_LOW_TEXTURE");
 
-        Candidate best = FindBest(frame, sampleBanks, templateWidth, templateHeight, searchArea, null);
+        Candidate best = FindBest(
+            frame,
+            sampleBanks,
+            templateWidth,
+            templateHeight,
+            searchArea,
+            null,
+            coarseSampleLimit);
         if (best.Score < 0) return Missing(frame.Sequence, "VISUAL_CHARACTER_NOT_FOUND");
+        if (coarseSampleLimit > 0)
+            best = Refine(
+                frame,
+                sampleBanks,
+                templateWidth,
+                templateHeight,
+                searchArea,
+                best,
+                null);
         double sameTargetRadiusX = Math.Max(2d, templateWidth / 2d);
         double sameTargetRadiusY = Math.Max(2d, templateHeight / 2d);
+        bool IsSameTarget(Candidate candidate)
+        {
+            double deltaX = candidate.X - best.X;
+            double deltaY = candidate.Y - best.Y;
+            return Math.Abs(deltaX) < sameTargetRadiusX &&
+                Math.Abs(deltaY) < sameTargetRadiusY;
+        }
         Candidate second = FindBest(
             frame,
             sampleBanks,
             templateWidth,
             templateHeight,
             searchArea,
-            candidate =>
-            {
-                double deltaX = candidate.X - best.X;
-                double deltaY = candidate.Y - best.Y;
-                return Math.Abs(deltaX) < sameTargetRadiusX &&
-                    Math.Abs(deltaY) < sameTargetRadiusY;
-            });
+            IsSameTarget,
+            coarseSampleLimit);
+        if (coarseSampleLimit > 0 && second.Score >= 0)
+            second = Refine(
+                frame,
+                sampleBanks,
+                templateWidth,
+                templateHeight,
+                searchArea,
+                second,
+                IsSameTarget);
+        if (second.Score > best.Score) (best, second) = (second, best);
         return new SelfNameMatch(
             true,
             "VISUAL_CHARACTER_CANDIDATE",
@@ -95,7 +126,8 @@ public sealed class SelfAppearanceTemplateMatcher
         int templateWidth,
         int templateHeight,
         FrameRect search,
-        Func<Candidate, bool>? excluded)
+        Func<Candidate, bool>? excluded,
+        int sampleLimit)
     {
         Candidate best = new(0, 0, -1);
         int maxX = search.Right - templateWidth;
@@ -107,17 +139,48 @@ public sealed class SelfAppearanceTemplateMatcher
             if (excluded?.Invoke(candidate) == true) continue;
             double score = 0;
             foreach (TemplateSample[] samples in sampleBanks)
-                score = Math.Max(score, Score(frame, samples, x, y));
+                score = Math.Max(score, Score(frame, samples, x, y, sampleLimit));
             if (score > best.Score) best = new Candidate(x, y, score);
         }
         return best;
+    }
+
+    private static Candidate Refine(
+        CapturedFrame frame,
+        IReadOnlyList<TemplateSample[]> sampleBanks,
+        int templateWidth,
+        int templateHeight,
+        FrameRect fullSearch,
+        Candidate coarse,
+        Func<Candidate, bool>? excluded)
+    {
+        int maximumX = fullSearch.Right - templateWidth;
+        int maximumY = fullSearch.Bottom - templateHeight;
+        int left = Math.Max(fullSearch.X, coarse.X - RefinementRadiusPx);
+        int top = Math.Max(fullSearch.Y, coarse.Y - RefinementRadiusPx);
+        int right = Math.Min(maximumX, coarse.X + RefinementRadiusPx);
+        int bottom = Math.Min(maximumY, coarse.Y + RefinementRadiusPx);
+        var refinement = new FrameRect(
+            left,
+            top,
+            right - left + templateWidth,
+            bottom - top + templateHeight);
+        return FindBest(
+            frame,
+            sampleBanks,
+            templateWidth,
+            templateHeight,
+            refinement,
+            excluded,
+            0);
     }
 
     private static double Score(
         CapturedFrame frame,
         IReadOnlyList<TemplateSample> samples,
         int originX,
-        int originY)
+        int originY,
+        int sampleLimit)
     {
         ReadOnlySpan<byte> pixels = frame.BgraPixels.Span;
         double rawScoreSum = 0;
@@ -127,8 +190,12 @@ public sealed class SelfAppearanceTemplateMatcher
         double templateLuminanceSquaredSum = 0;
         double candidateLuminanceSquaredSum = 0;
         double luminanceProductSum = 0;
-        foreach (TemplateSample sample in samples)
+        int candidateLuminanceMinimum = 255;
+        int candidateLuminanceMaximum = 0;
+        int sampleCount = sampleLimit > 0 ? Math.Min(sampleLimit, samples.Count) : samples.Count;
+        for (int sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
         {
+            TemplateSample sample = samples[sampleIndex];
             int offset = (originY + sample.Y) * frame.Stride + (originX + sample.X) * 4;
             int colorDifference = Math.Abs(pixels[offset] - sample.B) +
                 Math.Abs(pixels[offset + 1] - sample.G) +
@@ -139,6 +206,8 @@ public sealed class SelfAppearanceTemplateMatcher
             int downOffset = offset + frame.Stride;
             int right = Luminance(pixels[rightOffset], pixels[rightOffset + 1], pixels[rightOffset + 2]);
             int down = Luminance(pixels[downOffset], pixels[downOffset + 1], pixels[downOffset + 2]);
+            candidateLuminanceMinimum = Math.Min(candidateLuminanceMinimum, Math.Min(center, Math.Min(right, down)));
+            candidateLuminanceMaximum = Math.Max(candidateLuminanceMaximum, Math.Max(center, Math.Max(right, down)));
             int edgeDifference = Math.Abs((center - right) - sample.RightDelta) +
                 Math.Abs((center - down) - sample.DownDelta);
             double colorScore = 1d - colorDifference / (3d * 255d);
@@ -152,9 +221,11 @@ public sealed class SelfAppearanceTemplateMatcher
             candidateLuminanceSquaredSum += center * center;
             luminanceProductSum += templateLuminance * center;
         }
-        double rawScore = rawScoreSum / samples.Count;
-        double robustScore = robustScoreSum / samples.Count;
-        double count = samples.Count;
+        if (candidateLuminanceMaximum - candidateLuminanceMinimum < 16) return 0;
+
+        double rawScore = rawScoreSum / sampleCount;
+        double robustScore = robustScoreSum / sampleCount;
+        double count = sampleCount;
         double correlationNumerator = count * luminanceProductSum -
             templateLuminanceSum * candidateLuminanceSum;
         double correlationDenominator = Math.Sqrt(

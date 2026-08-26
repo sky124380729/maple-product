@@ -16,6 +16,7 @@ public sealed class SelfIdentityStabilizer(
     private double? lastTrustedY;
     private int streak;
     private bool wasTrusted;
+    private bool relocationPending;
 
     public void Reset()
     {
@@ -27,17 +28,22 @@ public sealed class SelfIdentityStabilizer(
             lastTrustedY = null;
         }
         streak = 0;
+        relocationPending = false;
     }
 
-    public SelfIdentityObservation Update(SelfNameMatch match, bool allowTrackingAnchorAdvance = true)
+    public SelfIdentityObservation Update(
+        SelfNameMatch match,
+        bool allowTrackingAnchorAdvance = true,
+        bool allowRelocation = false)
     {
         bool newer = match.FrameSequence > lastSequence;
         if (newer) lastSequence = match.FrameSequence;
-        Candidate? candidate = newer ? SelectCandidate(match) : null;
-        if (!candidate.HasValue)
+        CandidateSelection? selection = newer ? SelectCandidate(match, allowRelocation) : null;
+        if (!selection.HasValue)
         {
-            string failureCode = FailureCode(match, newer);
+            string failureCode = FailureCode(match, newer, allowRelocation);
             streak = 0;
+            relocationPending = false;
             if (!wasTrusted)
             {
                 lastAcceptedX = null;
@@ -52,35 +58,49 @@ public sealed class SelfIdentityStabilizer(
                 failureCode);
         }
 
-        lastAcceptedX = candidate.Value.X;
-        lastAcceptedY = candidate.Value.Y;
+        Candidate candidate = selection.Value.Candidate;
+        if (selection.Value.IsRelocation)
+        {
+            bool continuesRelocation = relocationPending && IsWithinJump(candidate);
+            if (!continuesRelocation) streak = 0;
+            relocationPending = true;
+        }
+        else if (relocationPending)
+        {
+            streak = 0;
+            relocationPending = false;
+        }
+
+        lastAcceptedX = candidate.X;
+        lastAcceptedY = candidate.Y;
         streak++;
         if (streak < requiredFrames)
             return new SelfIdentityObservation(
                 SelfIdentityStatus.Acquiring,
                 match.FrameSequence,
-                candidate.Value.X,
-                candidate.Value.Y,
-                candidate.Value.Score,
+                candidate.X,
+                candidate.Y,
+                candidate.Score,
                 "VISUAL_SELF_ACQUIRING");
 
         bool firstTrustedFrame = !wasTrusted;
         wasTrusted = true;
-        if (firstTrustedFrame || allowTrackingAnchorAdvance)
+        if (firstTrustedFrame || allowTrackingAnchorAdvance || selection.Value.IsRelocation)
         {
-            lastTrustedX = candidate.Value.X;
-            lastTrustedY = candidate.Value.Y;
+            lastTrustedX = candidate.X;
+            lastTrustedY = candidate.Y;
         }
+        relocationPending = false;
         return new SelfIdentityObservation(
             SelfIdentityStatus.Trusted,
             match.FrameSequence,
-            candidate.Value.X,
-            candidate.Value.Y,
-            candidate.Value.Score,
+            candidate.X,
+            candidate.Y,
+            candidate.Score,
             "VISUAL_SELF_TRUSTED");
     }
 
-    private Candidate? SelectCandidate(SelfNameMatch match)
+    private CandidateSelection? SelectCandidate(SelfNameMatch match, bool allowRelocation)
     {
         if (!match.HasCandidate) return null;
         if (!wasTrusted)
@@ -90,7 +110,7 @@ public sealed class SelfIdentityStabilizer(
                 return null;
             var candidate = new Candidate(match.BestScore, match.CenterX, match.CenterY);
             return !lastAcceptedX.HasValue || !lastAcceptedY.HasValue || IsWithinJump(candidate)
-                ? candidate
+                ? new CandidateSelection(candidate, false)
                 : null;
         }
 
@@ -101,28 +121,40 @@ public sealed class SelfIdentityStabilizer(
         ];
         if (preferHighestLocalScore)
         {
-            if (!IsLocal(local[0].Score, local[0].X, local[0].Y)) return null;
-            if (IsLocal(local[1].Score, local[1].X, local[1].Y) &&
-                local[0].Score - local[1].Score < minimumTrackingPeakMargin)
-                return null;
-            return local[0];
+            if (IsLocal(local[0].Score, local[0].X, local[0].Y))
+            {
+                if (IsLocal(local[1].Score, local[1].X, local[1].Y) &&
+                    local[0].Score - local[1].Score < minimumTrackingPeakMargin)
+                    return null;
+                return new CandidateSelection(local[0], false);
+            }
+            return allowRelocation && IsUniqueAcquisitionCandidate(match)
+                ? new CandidateSelection(local[0], true)
+                : null;
         }
         Candidate[] acceptable = local
             .Where(candidate => IsLocal(candidate.Score, candidate.X, candidate.Y))
             .OrderBy(DistanceFromLastAccepted)
             .ToArray();
         if (acceptable.Length == 0) return null;
-        if (acceptable.Length == 1) return acceptable[0];
+        if (acceptable.Length == 1) return new CandidateSelection(acceptable[0], false);
         if (Math.Abs(acceptable[0].Score - acceptable[1].Score) < minimumTrackingPeakMargin)
             return null;
-        return Math.Abs(
+        Candidate? selected = Math.Abs(
             DistanceFromLastAccepted(acceptable[0]) -
             DistanceFromLastAccepted(acceptable[1])) < 1
             ? null
             : acceptable[0];
+        return selected.HasValue ? new CandidateSelection(selected.Value, false) : null;
     }
 
-    private string FailureCode(SelfNameMatch match, bool newer)
+    private bool IsUniqueAcquisitionCandidate(SelfNameMatch match) =>
+        match.BestScore >= minimumAcquisitionScore &&
+        match.BestScore - match.SecondBestScore >= minimumPeakMargin &&
+        !double.IsNaN(match.CenterX) &&
+        !double.IsNaN(match.CenterY);
+
+    private string FailureCode(SelfNameMatch match, bool newer, bool allowRelocation)
     {
         if (!newer) return "VISUAL_FRAME_NOT_NEW";
         if (!match.HasCandidate) return match.Code;
@@ -145,6 +177,12 @@ public sealed class SelfIdentityStabilizer(
         ];
         if (preferHighestLocalScore)
         {
+            if (allowRelocation && !IsLocal(local[0].Score, local[0].X, local[0].Y))
+            {
+                if (match.BestScore < minimumAcquisitionScore) return "VISUAL_NAME_SCORE_LOW";
+                if (match.BestScore - match.SecondBestScore < minimumPeakMargin)
+                    return "VISUAL_NAME_AMBIGUOUS";
+            }
             if (!IsLocal(local[0].Score, local[0].X, local[0].Y)) return "VISUAL_SELF_JUMP";
             return IsLocal(local[1].Score, local[1].X, local[1].Y) &&
                 local[0].Score - local[1].Score < minimumTrackingPeakMargin
@@ -200,4 +238,5 @@ public sealed class SelfIdentityStabilizer(
             : (lastAcceptedX!.Value, lastAcceptedY!.Value);
 
     private readonly record struct Candidate(double Score, double X, double Y);
+    private readonly record struct CandidateSelection(Candidate Candidate, bool IsRelocation);
 }

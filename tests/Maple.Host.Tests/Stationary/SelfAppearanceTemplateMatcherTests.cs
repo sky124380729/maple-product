@@ -124,6 +124,62 @@ public sealed class SelfAppearanceTemplateMatcherTests
         Assert.True(double.IsNaN(match.SecondCenterY));
     }
 
+    [Fact]
+    public void Uniform_missing_character_patch_scores_below_the_tracking_threshold()
+    {
+        byte[] appearance = Template(seed: 0);
+        CapturedFrame frame = Frame();
+
+        SelfNameMatch match = new SelfAppearanceTemplateMatcher().Match(
+            frame,
+            [appearance],
+            TemplateWidth,
+            TemplateHeight,
+            new FrameRect(52, 20, 56, 60));
+
+        Assert.True(
+            match.BestScore < VisualStationaryObservationSession.CharacterTrackingScoreThreshold,
+            $"Uniform background scored {match.BestScore:F4}.");
+    }
+
+    [Fact]
+    public void Sparse_feature_search_refines_an_arbitrary_pixel_candidate_exactly()
+    {
+        byte[] appearance = Template(seed: 0);
+        CapturedFrame frame = Frame((65, 31, appearance));
+
+        SelfNameMatch match = new SelfAppearanceTemplateMatcher().Match(
+            frame,
+            [appearance],
+            TemplateWidth,
+            TemplateHeight,
+            new FrameRect(48, 20, 100, 70),
+            coarseSampleLimit: 16);
+
+        Assert.InRange(match.BestScore, 0.99, 1.0);
+        Assert.Equal(81, match.CenterX);
+        Assert.Equal(51, match.CenterY);
+    }
+
+    [Fact]
+    public void Sparse_feature_search_refines_two_spatial_candidates_for_ambiguity()
+    {
+        byte[] appearance = Template(seed: 0);
+        CapturedFrame frame = Frame((55, 31, appearance), (99, 33, appearance));
+
+        SelfNameMatch match = new SelfAppearanceTemplateMatcher().Match(
+            frame,
+            [appearance],
+            TemplateWidth,
+            TemplateHeight,
+            new FrameRect(48, 20, 100, 70),
+            coarseSampleLimit: 16);
+
+        Assert.InRange(match.BestScore, 0.99, 1.0);
+        Assert.InRange(match.SecondBestScore, 0.99, 1.0);
+        Assert.True(Math.Abs(match.CenterX - match.SecondCenterX) >= TemplateWidth / 2d);
+    }
+
     internal static byte[] Template(int seed)
     {
         byte[] pixels = new byte[TemplateWidth * TemplateHeight * 4];

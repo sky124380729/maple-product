@@ -213,7 +213,7 @@ public sealed class SelfIdentityStabilizerTests
         stabilizer.Update(Match(1, 100, best: 0.92));
         stabilizer.Update(Match(2, 100, best: 0.92));
         Assert.Equal(SelfIdentityStatus.Trusted, stabilizer.Update(Match(3, 100, best: 0.92)).Status);
-        Assert.Equal(SelfIdentityStatus.Untrusted, stabilizer.Update(Match(4, 100, best: 0.69)).Status);
+        Assert.Equal(SelfIdentityStatus.Untrusted, stabilizer.Update(Match(4, 100, best: 0.67)).Status);
         Assert.Equal(SelfIdentityStatus.Acquiring, stabilizer.Update(Match(5, 112, best: 0.90)).Status);
 
         SelfIdentityObservation ambiguous = stabilizer.Update(Match(
@@ -229,18 +229,82 @@ public sealed class SelfIdentityStabilizerTests
     }
 
     [Fact]
-    public void Character_track_accepts_point_seven_zero_and_recovers_only_after_three_new_frames()
+    public void Character_track_accepts_point_six_eight_and_recovers_only_after_three_new_frames()
     {
         SelfIdentityStabilizer stabilizer = CharacterStabilizer();
         stabilizer.Update(Match(1, 100, best: 0.92));
         stabilizer.Update(Match(2, 100, best: 0.92));
         Assert.Equal(SelfIdentityStatus.Trusted, stabilizer.Update(Match(3, 100, best: 0.92)).Status);
 
-        Assert.Equal(SelfIdentityStatus.Trusted, stabilizer.Update(Match(4, 100, best: 0.70)).Status);
-        Assert.Equal(SelfIdentityStatus.Untrusted, stabilizer.Update(Match(5, 100, best: 0.69)).Status);
-        Assert.Equal(SelfIdentityStatus.Acquiring, stabilizer.Update(Match(6, 100, best: 0.70)).Status);
-        Assert.Equal(SelfIdentityStatus.Acquiring, stabilizer.Update(Match(7, 100, best: 0.70)).Status);
-        Assert.Equal(SelfIdentityStatus.Trusted, stabilizer.Update(Match(8, 100, best: 0.70)).Status);
+        Assert.Equal(SelfIdentityStatus.Trusted, stabilizer.Update(Match(4, 100, best: 0.68)).Status);
+        Assert.Equal(SelfIdentityStatus.Untrusted, stabilizer.Update(Match(5, 100, best: 0.67)).Status);
+        Assert.Equal(SelfIdentityStatus.Acquiring, stabilizer.Update(Match(6, 100, best: 0.68)).Status);
+        Assert.Equal(SelfIdentityStatus.Acquiring, stabilizer.Update(Match(7, 100, best: 0.68)).Status);
+        Assert.Equal(SelfIdentityStatus.Trusted, stabilizer.Update(Match(8, 100, best: 0.68)).Status);
+    }
+
+    [Fact]
+    public void Established_character_track_tolerates_the_logged_point_six_nine_two_local_score()
+    {
+        SelfIdentityStabilizer stabilizer = CharacterStabilizer();
+        stabilizer.Update(Match(1, 100, best: 0.92));
+        stabilizer.Update(Match(2, 100, best: 0.92));
+        Assert.Equal(SelfIdentityStatus.Trusted, stabilizer.Update(Match(3, 100, best: 0.92)).Status);
+
+        SelfIdentityObservation result = stabilizer.Update(Match(4, 100, best: 0.692));
+
+        Assert.Equal(SelfIdentityStatus.Trusted, result.Status);
+        Assert.Equal(100, result.CenterX);
+    }
+
+    [Fact]
+    public void Point_six_nine_two_cannot_acquire_a_new_character_track()
+    {
+        var stabilizer = new SelfIdentityStabilizer(
+            minimumAcquisitionScore: VisualStationaryObservationSession.CharacterAcquisitionScoreThreshold,
+            minimumTrackingScore: VisualStationaryObservationSession.CharacterTrackingScoreThreshold,
+            minimumPeakMargin: 0.06,
+            requiredFrames: 3,
+            maximumJumpPx: 12,
+            minimumTrackingPeakMargin: 0.04,
+            preferHighestLocalScore: true);
+
+        SelfIdentityObservation[] results =
+        [
+            stabilizer.Update(Match(1, 100, best: 0.692)),
+            stabilizer.Update(Match(2, 100, best: 0.692)),
+            stabilizer.Update(Match(3, 100, best: 0.692))
+        ];
+
+        Assert.All(results, result => Assert.Equal(SelfIdentityStatus.Acquiring, result.Status));
+        Assert.All(results, result => Assert.Equal("VISUAL_NAME_SCORE_LOW", result.Code));
+    }
+
+    [Fact]
+    public void Established_character_relocates_only_after_three_high_confidence_frames()
+    {
+        SelfIdentityStabilizer stabilizer = CharacterStabilizer();
+        stabilizer.Update(Match(1, 100, best: 0.92));
+        stabilizer.Update(Match(2, 100, best: 0.92));
+        Assert.Equal(SelfIdentityStatus.Trusted, stabilizer.Update(Match(3, 100, best: 0.92)).Status);
+
+        SelfIdentityObservation first = stabilizer.Update(
+            Match(4, 170, best: 0.94),
+            allowTrackingAnchorAdvance: true,
+            allowRelocation: true);
+        SelfIdentityObservation second = stabilizer.Update(
+            Match(5, 171, best: 0.94),
+            allowTrackingAnchorAdvance: true,
+            allowRelocation: true);
+        SelfIdentityObservation third = stabilizer.Update(
+            Match(6, 170, best: 0.94),
+            allowTrackingAnchorAdvance: true,
+            allowRelocation: true);
+
+        Assert.Equal(SelfIdentityStatus.Acquiring, first.Status);
+        Assert.Equal(SelfIdentityStatus.Acquiring, second.Status);
+        Assert.Equal(SelfIdentityStatus.Trusted, third.Status);
+        Assert.Equal(170, third.CenterX);
     }
 
     private static SelfIdentityStabilizer TrustedAt(double x)

@@ -6,7 +6,7 @@ namespace Maple.Host.Stationary;
 public sealed class VisualStationaryObservationSession : IVisualStationaryObservationSource
 {
     public const double CharacterAcquisitionScoreThreshold = 0.70;
-    public const double CharacterTrackingScoreThreshold = 0.70;
+    public const double CharacterTrackingScoreThreshold = 0.68;
 
     private readonly VisualStationaryProfile profile;
     private readonly SelfNameTemplateMatcher nameMatcher;
@@ -24,6 +24,7 @@ public sealed class VisualStationaryObservationSession : IVisualStationaryObserv
     private double appearanceAnchorX;
     private double appearanceAnchorY;
     private bool movementTrackingActive;
+    private bool appearanceTrackEstablished;
 
     public VisualStationaryObservationSession(
         VisualStationaryProfile profile,
@@ -140,17 +141,23 @@ public sealed class VisualStationaryObservationSession : IVisualStationaryObserv
             return;
         }
 
-        SelfNameMatch match = MatchIdentity(frame);
+        IdentityMatchResult matchResult = MatchIdentity(frame);
+        SelfNameMatch match = matchResult.Match;
         SelfIdentityObservation identity = stabilizer.Update(
             match,
-            profile.IdentityKind != VisualIdentityKind.CharacterAppearance || movementTrackingActive);
+            profile.IdentityKind != VisualIdentityKind.CharacterAppearance ||
+                movementTrackingActive || matchResult.IsRelocation,
+            matchResult.IsRelocation);
         if (profile.IdentityKind == VisualIdentityKind.CharacterAppearance &&
-            movementTrackingActive &&
             identity.Status == SelfIdentityStatus.Trusted &&
             identity.CenterX.HasValue && identity.CenterY.HasValue)
         {
-            appearanceAnchorX = identity.CenterX.Value;
-            appearanceAnchorY = identity.CenterY.Value;
+            if (!appearanceTrackEstablished || movementTrackingActive || matchResult.IsRelocation)
+            {
+                appearanceAnchorX = identity.CenterX.Value;
+                appearanceAnchorY = identity.CenterY.Value;
+            }
+            appearanceTrackEstablished = true;
         }
         bool trusted = identity.Status == SelfIdentityStatus.Trusted && identity.CenterX.HasValue;
         VisualPlatformState platform = trusted
@@ -279,25 +286,65 @@ public sealed class VisualStationaryObservationSession : IVisualStationaryObserv
         return new FrameRect(left, top, right - left, bottom - top);
     }
 
-    private SelfNameMatch MatchIdentity(CapturedFrame frame)
+    private IdentityMatchResult MatchIdentity(CapturedFrame frame)
     {
         if (profile.IdentityKind != VisualIdentityKind.CharacterAppearance)
         {
-            return nameMatcher.Match(
-                frame,
-                profile.NameTemplateBgra,
-                profile.NameTemplateWidth,
-                profile.NameTemplateHeight,
-                CreateSearchArea(profile));
+            return new IdentityMatchResult(
+                nameMatcher.Match(
+                    frame,
+                    profile.NameTemplateBgra,
+                    profile.NameTemplateWidth,
+                    profile.NameTemplateHeight,
+                    CreateSearchArea(profile)),
+                false);
         }
 
         VisualCharacterTemplateBank bank = profile.CharacterAppearance!;
-        return appearanceMatcher.Match(
+        FrameRect localArea = CreateAppearanceSearchArea(bank);
+        SelfNameMatch local = appearanceMatcher.Match(
             frame,
             bank.TemplatesBgra,
             bank.TemplateWidth,
             bank.TemplateHeight,
-            CreateAppearanceSearchArea(bank));
+            localArea);
+        double minimumLocalScore = appearanceTrackEstablished
+            ? CharacterTrackingScoreThreshold
+            : CharacterAcquisitionScoreThreshold;
+        double minimumLocalMargin = appearanceTrackEstablished ? 0.04 : 0.06;
+        bool localEvidenceInsufficient = local.BestScore < minimumLocalScore ||
+            local.BestScore - local.SecondBestScore < minimumLocalMargin;
+        bool shouldProbePlatform = localEvidenceInsufficient ||
+            IsCandidateAtSearchEdge(local, localArea, bank);
+        if (!shouldProbePlatform)
+            return new IdentityMatchResult(local, false);
+
+        SelfNameMatch platform = appearanceMatcher.Match(
+            frame,
+            bank.TemplatesBgra,
+            bank.TemplateWidth,
+            bank.TemplateHeight,
+            CreatePlatformAppearanceSearchArea(bank),
+            coarseSampleLimit: 16);
+        bool distantBetter = platform.BestScore > local.BestScore &&
+            IsOutsideAppearanceAnchor(platform);
+        return distantBetter
+            ? new IdentityMatchResult(platform, true)
+            : new IdentityMatchResult(local, false);
+    }
+
+    private static bool IsCandidateAtSearchEdge(
+        SelfNameMatch match,
+        FrameRect searchArea,
+        VisualCharacterTemplateBank bank)
+    {
+        if (!match.HasCandidate || double.IsNaN(match.CenterX) || double.IsNaN(match.CenterY)) return false;
+        double candidateX = match.CenterX - bank.TemplateWidth / 2d;
+        double candidateY = match.CenterY - bank.TemplateHeight / 2d;
+        int maximumX = searchArea.Right - bank.TemplateWidth;
+        int maximumY = searchArea.Bottom - bank.TemplateHeight;
+        return candidateX <= searchArea.X + 1 || candidateX >= maximumX - 1 ||
+            candidateY <= searchArea.Y + 1 || candidateY >= maximumY - 1;
     }
 
     private VisualIdentityCandidate? CreateIdentityCandidate(SelfNameMatch match, bool trusted)
@@ -337,6 +384,41 @@ public sealed class VisualStationaryObservationSession : IVisualStationaryObserv
         return new FrameRect(left, top, right - left, bottom - top);
     }
 
+    private FrameRect CreatePlatformAppearanceSearchArea(VisualCharacterTemplateBank bank)
+    {
+        int halfWidth = bank.TemplateWidth / 2;
+        int halfHeight = bank.TemplateHeight / 2;
+        int left = Math.Max(0, profile.Platform.X - halfWidth);
+        int right = Math.Min(profile.FrameWidth, profile.Platform.Right + bank.TemplateWidth - halfWidth);
+        int top;
+        int bottom;
+        if (appearanceAnchorY >= profile.Platform.Y && appearanceAnchorY <= profile.Platform.Bottom)
+        {
+            top = Math.Max(0, profile.Platform.Y - halfHeight);
+            bottom = Math.Min(profile.FrameHeight, profile.Platform.Bottom + bank.TemplateHeight - halfHeight);
+        }
+        else
+        {
+            int radius = AppearanceSearchRadius();
+            top = Math.Max(0, (int)Math.Floor(appearanceAnchorY - halfHeight - radius));
+            bottom = Math.Min(
+                profile.FrameHeight,
+                (int)Math.Ceiling(appearanceAnchorY + bank.TemplateHeight - halfHeight + radius));
+        }
+        return new FrameRect(left, top, right - left, bottom - top);
+    }
+
+    private bool IsOutsideAppearanceAnchor(SelfNameMatch match)
+    {
+        if (!match.HasCandidate || double.IsNaN(match.CenterX) || double.IsNaN(match.CenterY)) return false;
+        int radius = AppearanceSearchRadius();
+        return Math.Abs(match.CenterX - appearanceAnchorX) > radius ||
+            Math.Abs(match.CenterY - appearanceAnchorY) > radius;
+    }
+
+    private int AppearanceSearchRadius() =>
+        Math.Max(1, (int)Math.Ceiling(12d * profile.FrameWidth / 1366d));
+
     private static SelfIdentityStabilizer CreateStabilizer(VisualStationaryProfile profile)
     {
         if (profile.IdentityKind != VisualIdentityKind.CharacterAppearance)
@@ -351,6 +433,8 @@ public sealed class VisualStationaryObservationSession : IVisualStationaryObserv
             minimumTrackingPeakMargin: 0.04,
             preferHighestLocalScore: true);
     }
+
+    private readonly record struct IdentityMatchResult(SelfNameMatch Match, bool IsRelocation);
 
     private static VisualStationaryProfile FreezeCharacterTemplates(VisualStationaryProfile profile)
     {

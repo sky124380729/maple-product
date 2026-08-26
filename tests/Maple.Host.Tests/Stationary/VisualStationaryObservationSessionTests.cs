@@ -13,9 +13,9 @@ public sealed class VisualStationaryObservationSessionTests
     }
 
     [Fact]
-    public void Character_tracking_threshold_is_seventy_percent()
+    public void Character_tracking_threshold_is_sixty_eight_percent()
     {
-        Assert.Equal(0.70, VisualStationaryObservationSession.CharacterTrackingScoreThreshold);
+        Assert.Equal(0.68, VisualStationaryObservationSession.CharacterTrackingScoreThreshold);
     }
 
     [Fact]
@@ -312,7 +312,7 @@ public sealed class VisualStationaryObservationSessionTests
     }
 
     [Fact]
-    public void Character_acquisition_cannot_walk_the_anchor_away_from_the_saved_source()
+    public void Character_acquisition_tracks_high_confidence_motion_across_the_yellow_platform()
     {
         byte[] appearance = SelfAppearanceTemplateMatcherTests.Template(0);
         var profile = new VisualStationaryProfile(
@@ -333,12 +333,13 @@ public sealed class VisualStationaryObservationSessionTests
         session.PushFrame(LargeCharacterFrame(appearance, 2, 124));
         session.PushFrame(LargeCharacterFrame(appearance, 3, 136));
 
-        Assert.False(session.Latest!.IdentityTrusted);
-        Assert.Equal(VisualSafetyState.Untrusted, session.Latest.Platform.State);
+        Assert.True(session.Latest!.IdentityTrusted);
+        Assert.Equal(152, session.Latest.Platform.CenterX);
+        Assert.Equal(VisualSafetyState.Safe, session.Latest.Platform.State);
     }
 
     [Fact]
-    public void Trusted_character_cannot_walk_the_anchor_while_no_direction_movement_is_active()
+    public void High_confidence_character_needs_three_distant_frames_before_relocating_without_movement()
     {
         byte[] appearance = SelfAppearanceTemplateMatcherTests.Template(0);
         VisualStationaryProfile profile = LargeCharacterProfile(appearance);
@@ -352,8 +353,15 @@ public sealed class VisualStationaryObservationSessionTests
         session.PushFrame(LargeCharacterFrame(appearance, 5, 124));
         session.PushFrame(LargeCharacterFrame(appearance, 6, 136));
 
-        Assert.NotNull(session.Latest!.Platform.CenterX);
-        Assert.InRange(session.Latest.Platform.CenterX!.Value, 104, 128);
+        Assert.False(session.Latest!.IdentityTrusted);
+        Assert.Null(session.Latest.Platform.CenterX);
+
+        session.PushFrame(LargeCharacterFrame(appearance, 7, 136));
+
+        Assert.True(
+            session.Latest.IdentityTrusted,
+            $"{session.Latest.Code}; score={session.Latest.Platform.BestScore:F4}; candidate={session.Latest.IdentityCandidate}");
+        Assert.Equal(152, session.Latest.Platform.CenterX);
     }
 
     [Fact]
@@ -378,8 +386,118 @@ public sealed class VisualStationaryObservationSessionTests
         Assert.True(session.Latest.IdentityTrusted);
         session.PushFrame(LargeCharacterFrame(appearance, 8, 160));
 
-        Assert.NotNull(session.Latest.Platform.CenterX);
-        Assert.InRange(session.Latest.Platform.CenterX!.Value, 140, 164);
+        Assert.False(session.Latest.IdentityTrusted);
+        Assert.Null(session.Latest.Platform.CenterX);
+        session.PushFrame(LargeCharacterFrame(appearance, 9, 160));
+        Assert.False(session.Latest.IdentityTrusted);
+        session.PushFrame(LargeCharacterFrame(appearance, 10, 160));
+        Assert.True(
+            session.Latest.IdentityTrusted,
+            $"{session.Latest.Code}; score={session.Latest.Platform.BestScore:F4}; candidate={session.Latest.IdentityCandidate}");
+        Assert.Equal(176, session.Latest.Platform.CenterX);
+    }
+
+    [Fact]
+    public void Established_character_is_reacquired_across_the_yellow_platform_after_three_frames()
+    {
+        byte[] appearance = SelfAppearanceTemplateMatcherTests.Template(0);
+        var session = new VisualStationaryObservationSession(YellowAreaCharacterProfile(appearance));
+        session.PushFrame(LargeCharacterFrame(appearance, 1, 100));
+        session.PushFrame(LargeCharacterFrame(appearance, 2, 100));
+        session.PushFrame(LargeCharacterFrame(appearance, 3, 100));
+        Assert.True(session.Latest!.IdentityTrusted);
+
+        session.PushFrame(LargeCharacterFrame(appearance, 4, 240));
+        VisualIdentityCandidate first = Assert.IsType<VisualIdentityCandidate>(session.Latest.IdentityCandidate);
+        Assert.Equal(new FrameRect(240, 30, 32, 40), first.Bounds);
+        Assert.False(session.Latest.IdentityTrusted);
+
+        session.PushFrame(LargeCharacterFrame(appearance, 5, 240));
+        Assert.False(session.Latest.IdentityTrusted);
+        session.PushFrame(LargeCharacterFrame(appearance, 6, 240));
+
+        Assert.True(session.Latest.IdentityTrusted);
+        Assert.Equal(256, session.Latest.Platform.CenterX);
+        Assert.Equal(VisualSafetyState.GuardRight, session.Latest.Platform.State);
+    }
+
+    [Fact]
+    public void New_session_acquires_the_configured_appearance_across_the_yellow_platform()
+    {
+        byte[] appearance = SelfAppearanceTemplateMatcherTests.Template(0);
+        var session = new VisualStationaryObservationSession(YellowAreaCharacterProfile(appearance));
+
+        session.PushFrame(LargeCharacterFrame(appearance, 1, 240));
+        session.PushFrame(LargeCharacterFrame(appearance, 2, 240));
+        Assert.False(session.Latest!.IdentityTrusted);
+        session.PushFrame(LargeCharacterFrame(appearance, 3, 240));
+
+        Assert.True(session.Latest.IdentityTrusted);
+        Assert.Equal(256, session.Latest.Platform.CenterX);
+    }
+
+    [Fact]
+    public void Yellow_platform_acquisition_supports_the_maximum_eight_appearance_templates()
+    {
+        byte[][] appearances = Enumerable.Range(0, 8)
+            .Select(seed => SelfAppearanceTemplateMatcherTests.Template(seed * 23))
+            .ToArray();
+        VisualStationaryProfile profile = YellowAreaCharacterProfile(appearances[0]) with
+        {
+            CharacterAppearance = new VisualCharacterTemplateBank(
+                new FrameRect(100, 30, 32, 40),
+                32,
+                40,
+                appearances,
+                1)
+        };
+        var session = new VisualStationaryObservationSession(profile);
+
+        session.PushFrame(LargeCharacterFrame(appearances[0], 1, 240));
+        session.PushFrame(LargeCharacterFrame(appearances[0], 2, 240));
+        session.PushFrame(LargeCharacterFrame(appearances[0], 3, 240));
+
+        Assert.True(
+            session.Latest!.IdentityTrusted,
+            $"{session.Latest.Code}; score={session.Latest.Platform.BestScore:F4}; candidate={session.Latest.IdentityCandidate}");
+        Assert.Equal(256, session.Latest.Platform.CenterX);
+    }
+
+    [Fact]
+    public void Yellow_platform_recovery_freezes_when_two_spatial_candidates_tie()
+    {
+        byte[] appearance = SelfAppearanceTemplateMatcherTests.Template(0);
+        var session = new VisualStationaryObservationSession(YellowAreaCharacterProfile(appearance));
+        session.PushFrame(LargeCharacterFrame(appearance, 1, 100));
+        session.PushFrame(LargeCharacterFrame(appearance, 2, 100));
+        session.PushFrame(LargeCharacterFrame(appearance, 3, 100));
+        Assert.True(session.Latest!.IdentityTrusted);
+
+        session.PushFrame(LargeCharacterFrame(appearance, 4, 190, 240));
+        session.PushFrame(LargeCharacterFrame(appearance, 5, 190, 240));
+        session.PushFrame(LargeCharacterFrame(appearance, 6, 190, 240));
+
+        Assert.False(session.Latest.IdentityTrusted);
+        Assert.Equal(VisualSafetyState.Untrusted, session.Latest.Platform.State);
+        Assert.Equal("VISUAL_NAME_AMBIGUOUS", session.Latest.Code);
+    }
+
+    [Fact]
+    public void Appearance_outside_the_yellow_platform_cannot_take_over_after_local_loss()
+    {
+        byte[] appearance = SelfAppearanceTemplateMatcherTests.Template(0);
+        var session = new VisualStationaryObservationSession(YellowAreaCharacterProfile(appearance));
+        session.PushFrame(LargeCharacterFrame(appearance, 1, 100));
+        session.PushFrame(LargeCharacterFrame(appearance, 2, 100));
+        session.PushFrame(LargeCharacterFrame(appearance, 3, 100));
+        Assert.True(session.Latest!.IdentityTrusted);
+
+        session.PushFrame(LargeCharacterFrame(appearance, 4, 320));
+        session.PushFrame(LargeCharacterFrame(appearance, 5, 320));
+        session.PushFrame(LargeCharacterFrame(appearance, 6, 320));
+
+        Assert.False(session.Latest.IdentityTrusted);
+        Assert.Null(session.Latest.Platform.CenterX);
     }
 
     [Fact]
@@ -434,6 +552,19 @@ public sealed class VisualStationaryObservationSessionTests
         VisualIdentityKind.CharacterAppearance,
         new VisualCharacterTemplateBank(new FrameRect(100, 30, 32, 40), 32, 40, [appearance], 1));
 
+    private static VisualStationaryProfile YellowAreaCharacterProfile(byte[] appearance) => new(
+        VisualStationaryProfile.SchemaVersionCurrent,
+        1366,
+        200,
+        new FrameRect(40, 20, 240, 100),
+        new FrameRect(0, 0, 0, 0),
+        0,
+        0,
+        [],
+        DateTimeOffset.Parse("2026-08-22T00:00:00Z"),
+        VisualIdentityKind.CharacterAppearance,
+        new VisualCharacterTemplateBank(new FrameRect(100, 30, 32, 40), 32, 40, [appearance], 1));
+
     private static CapturedFrame Frame(byte[] template, long sequence, params (int X, int Y)[] positions) =>
         SelfNameTemplateMatcherTests.Frame(160, 80, template, 8, 4, positions) with
         {
@@ -461,11 +592,12 @@ public sealed class VisualStationaryObservationSessionTests
         return mirrored;
     }
 
-    private static CapturedFrame LargeCharacterFrame(byte[] appearance, long sequence, int x)
+    private static CapturedFrame LargeCharacterFrame(byte[] appearance, long sequence, params int[] positions)
     {
         const int width = 1366, height = 200, templateWidth = 32, templateHeight = 40;
         byte[] pixels = new byte[width * height * 4];
         for (int offset = 3; offset < pixels.Length; offset += 4) pixels[offset] = 255;
+        foreach (int x in positions)
         for (int row = 0; row < templateHeight; row++)
             appearance.AsSpan(row * templateWidth * 4, templateWidth * 4)
                 .CopyTo(pixels.AsSpan(((30 + row) * width + x) * 4, templateWidth * 4));
