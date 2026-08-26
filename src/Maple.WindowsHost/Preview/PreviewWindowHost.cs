@@ -21,6 +21,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
     private TextBlock? recordingStatus;
     private WpfButton? recordButton;
     private WpfButton? visualSetupButton;
+    private WpfButton? characterSetupButton;
     private WpfButton? clearVisualButton;
     private Canvas? overlay;
     private PreviewSession? session;
@@ -98,12 +99,20 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         recordButton.Click += OnRecordClicked;
         visualSetupButton = new WpfButton
         {
-            Content = "配置视觉安全区",
-            ToolTip = "框选平台范围和自己的角色外观",
+            Content = "配置平台",
+            ToolTip = "只框选平台范围，继续使用已采集的人物模板",
             Padding = new Thickness(12, 5, 12, 5),
             Margin = new Thickness(8, 5, 0, 5)
         };
         visualSetupButton.Click += OnVisualSetupClicked;
+        characterSetupButton = new WpfButton
+        {
+            Content = "更新人物模板",
+            ToolTip = "发型、装备或人物外观变化后重新采集",
+            Padding = new Thickness(12, 5, 12, 5),
+            Margin = new Thickness(8, 5, 0, 5)
+        };
+        characterSetupButton.Click += OnCharacterSetupClicked;
         clearVisualButton = new WpfButton
         {
             Content = "清除视觉配置",
@@ -125,6 +134,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         var toolbar = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
         toolbar.Children.Add(recordButton);
         toolbar.Children.Add(visualSetupButton);
+        toolbar.Children.Add(characterSetupButton);
         toolbar.Children.Add(clearVisualButton);
         toolbar.Children.Add(recordingStatus);
         grid.Children.Add(toolbar);
@@ -337,7 +347,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             if (recordingStatus is not null) recordingStatus.Text = "攻击或寻路运行中不能修改视觉配置";
             return;
         }
-        window.Dispatcher.Invoke(() => visualSetup.Begin());
+        window.Dispatcher.Invoke(() => visualSetup.BeginPlatformSetup());
     }
 
     public async Task<VisualProfileDeleteResult> ClearVisualProfileAsync(CancellationToken cancellationToken)
@@ -365,6 +375,23 @@ public sealed class PreviewWindowHost : IAsyncDisposable
     {
         if (visualSetup?.IsActive == true) visualSetup.Cancel();
         else BeginVisualSetup();
+    }
+
+    private void OnCharacterSetupClicked(object? sender, RoutedEventArgs eventArgs)
+    {
+        if (visualSetup?.IsActive == true) visualSetup.Cancel();
+        else BeginVisualCharacterSetup();
+    }
+
+    private void BeginVisualCharacterSetup()
+    {
+        if (window is null || visualSetup is null) return;
+        if (!CanClearVisualProfile())
+        {
+            if (recordingStatus is not null) recordingStatus.Text = "攻击或寻路运行中不能修改人物模板";
+            return;
+        }
+        window.Dispatcher.Invoke(() => visualSetup.BeginCharacterSetup());
     }
 
     private async void OnClearVisualClicked(object? sender, RoutedEventArgs eventArgs)
@@ -530,6 +557,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         recordingStatus = null;
         recordButton = null;
         visualSetupButton = null;
+        characterSetupButton = null;
         clearVisualButton = null;
         visualSetup = null;
         Volatile.Write(ref visualObservation, null);

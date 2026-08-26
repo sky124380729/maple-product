@@ -58,33 +58,29 @@ internal sealed class VisualStationarySetupController(
         RenderOverlay();
     }
 
-    public void Begin()
+    public void BeginPlatformSetup()
     {
-        CapturedFrame? frame = latestFrame();
-        if (frame is null)
+        if (!BeginSelection(SetupStep.Platform)) return;
+        bool reusesCharacter = CurrentProfile is
         {
-            setStatus("视觉配置：等待预览画面");
+            IdentityKind: VisualIdentityKind.CharacterAppearance,
+            CharacterAppearance: not null
+        };
+        setStatus(reusesCharacter
+            ? "平台配置：框选新的平台安全范围，已采集人物模板将继续使用"
+            : "视觉配置 1/2：框选平台安全范围");
+    }
+
+    public void BeginCharacterSetup()
+    {
+        if (CurrentProfile is null)
+        {
+            BeginPlatformSetup();
             return;
         }
-        frozenFrame = frame with { BgraPixels = frame.BgraPixels.ToArray() };
-        var bitmap = new WriteableBitmap(frame.Width, frame.Height, 96, 96, PixelFormats.Bgra32, null);
-        bitmap.WritePixels(
-            new Int32Rect(0, 0, frame.Width, frame.Height),
-            frozenFrame.BgraPixels.ToArray(),
-            frame.Stride,
-            0);
-        image.Source = bitmap;
-        platform = null;
-        characterSource = null;
-        dragStart = null;
-        dragCurrent = null;
-        step = SetupStep.Platform;
-        overlay.IsHitTestVisible = true;
-        overlay.Cursor = WpfCursors.Cross;
-        overlay.MouseLeftButtonDown += OnMouseDown;
-        overlay.MouseMove += OnMouseMove;
-        overlay.MouseLeftButtonUp += OnMouseUp;
-        setStatus("视觉配置 1/2：框选平台安全范围");
+        if (!BeginSelection(SetupStep.Character)) return;
+        platform = CurrentProfile.Platform;
+        setStatus("人物模板：框选本人头部和上半身，不含名字、宠物和大范围特效");
         RenderOverlay();
     }
 
@@ -197,6 +193,29 @@ internal sealed class VisualStationarySetupController(
                 return;
             }
             platform = selected.Value;
+            if (CurrentProfile is not null)
+            {
+                VisualProfileEditResult edited = VisualStationaryProfileEditor.ReplacePlatform(
+                    CurrentProfile,
+                    selected.Value,
+                    frozenFrame.Width,
+                    frozenFrame.Height,
+                    DateTimeOffset.UtcNow);
+                if (edited.Success && edited.Profile is not null)
+                {
+                    await SaveCompletedProfileAsync(
+                        edited.Profile,
+                        $"平台安全区已保存，继续使用人物模板 {edited.Profile.CharacterAppearance!.TemplatesBgra.Length} 张",
+                        CancellationToken.None);
+                    return;
+                }
+                if (edited.Code != "VISUAL_CHARACTER_TEMPLATE_NOT_CONFIGURED")
+                {
+                    setStatus("平台配置失败：" + edited.Code);
+                    RenderOverlay();
+                    return;
+                }
+            }
             step = SetupStep.Character;
             setStatus("视觉配置 2/2：框选本人头部和上半身，不含名字、宠物和大范围特效");
             RenderOverlay();
@@ -255,7 +274,10 @@ internal sealed class VisualStationarySetupController(
                 return;
             }
 
-            VisualStationaryProfile profile = CreateCharacterProfile(calibrator.Complete());
+            DateTimeOffset capturedAt = DateTimeOffset.UtcNow;
+            VisualStationaryProfile profile = CreateCharacterProfile(
+                calibrator.Complete(capturedAt),
+                capturedAt);
             VisualProfileValidationResult validation = VisualStationaryProfileValidator.Validate(
                 profile,
                 frozenFrame.Width,
@@ -268,19 +290,14 @@ internal sealed class VisualStationarySetupController(
                 return;
             }
 
-            VisualProfileSaveResult saved = await store.SaveAsync(profile, token);
-            if (!saved.Success)
+            if (!await SaveCompletedProfileAsync(
+                profile,
+                $"视觉安全区已保存，人物动作模板 {profile.CharacterAppearance!.TemplatesBgra.Length} 张",
+                token))
             {
                 ResumeCharacterSelection();
-                setStatus("视觉配置失败：" + saved.Code);
                 return;
             }
-            CurrentProfile = profile;
-            setConfigStatus("ready");
-            profileSaved(profile);
-            Detach();
-            setStatus($"视觉安全区已保存，人物动作模板 {profile.CharacterAppearance!.TemplatesBgra.Length} 张");
-            RenderOverlay();
         }
         catch (OperationCanceledException)
         {
@@ -300,7 +317,9 @@ internal sealed class VisualStationarySetupController(
         overlay.IsHitTestVisible = true;
     }
 
-    private VisualStationaryProfile CreateCharacterProfile(VisualCharacterTemplateBank bank) => new(
+    private VisualStationaryProfile CreateCharacterProfile(
+        VisualCharacterTemplateBank bank,
+        DateTimeOffset? updatedAtUtc = null) => new(
         VisualStationaryProfile.SchemaVersionCurrent,
         frozenFrame!.Width,
         frozenFrame.Height,
@@ -309,9 +328,60 @@ internal sealed class VisualStationarySetupController(
         0,
         0,
         [],
-        DateTimeOffset.UtcNow,
+        updatedAtUtc ?? DateTimeOffset.UtcNow,
         VisualIdentityKind.CharacterAppearance,
         bank);
+
+    private bool BeginSelection(SetupStep targetStep)
+    {
+        CapturedFrame? frame = latestFrame();
+        if (frame is null)
+        {
+            setStatus("视觉配置：等待预览画面");
+            return false;
+        }
+        if (IsActive) Detach();
+        frozenFrame = frame with { BgraPixels = frame.BgraPixels.ToArray() };
+        var bitmap = new WriteableBitmap(frame.Width, frame.Height, 96, 96, PixelFormats.Bgra32, null);
+        bitmap.WritePixels(
+            new Int32Rect(0, 0, frame.Width, frame.Height),
+            frozenFrame.BgraPixels.ToArray(),
+            frame.Stride,
+            0);
+        image.Source = bitmap;
+        platform = null;
+        characterSource = null;
+        dragStart = null;
+        dragCurrent = null;
+        step = targetStep;
+        overlay.IsHitTestVisible = true;
+        overlay.Cursor = WpfCursors.Cross;
+        overlay.MouseLeftButtonDown += OnMouseDown;
+        overlay.MouseMove += OnMouseMove;
+        overlay.MouseLeftButtonUp += OnMouseUp;
+        RenderOverlay();
+        return true;
+    }
+
+    private async Task<bool> SaveCompletedProfileAsync(
+        VisualStationaryProfile profile,
+        string successStatus,
+        CancellationToken cancellationToken)
+    {
+        VisualProfileSaveResult saved = await store.SaveAsync(profile, cancellationToken);
+        if (!saved.Success)
+        {
+            setStatus("视觉配置失败：" + saved.Code);
+            return false;
+        }
+        CurrentProfile = profile;
+        setConfigStatus("ready");
+        profileSaved(profile);
+        Detach();
+        setStatus(successStatus);
+        RenderOverlay();
+        return true;
+    }
 
     private static string DescribeValidationFailure(string code) => code switch
     {
