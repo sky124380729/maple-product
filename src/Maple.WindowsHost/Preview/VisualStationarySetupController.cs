@@ -116,7 +116,9 @@ internal sealed class VisualStationarySetupController(
             }
             return;
         }
-        FrameRect? platformToDraw = platform ?? profile?.Platform;
+        FrameRect? platformToDraw = step == SetupStep.Platform
+            ? platform
+            : platform ?? profile?.Platform;
         if (platformToDraw.HasValue)
         {
             AddRectangle(platformToDraw.Value, WpfBrushes.Gold,
@@ -133,7 +135,9 @@ internal sealed class VisualStationarySetupController(
                     WpfColor.FromArgb(24, 50, 205, 90), 2);
             }
         }
-        FrameRect? identityToDraw = characterSource ?? profile?.CharacterAppearance?.Source;
+        FrameRect? identityToDraw = step == SetupStep.Platform
+            ? null
+            : characterSource ?? profile?.CharacterAppearance?.Source;
         if (!identityToDraw.HasValue && profile is not null &&
             profile.IdentityKind == VisualIdentityKind.NameTemplate)
             identityToDraw = profile.NameSource;
@@ -368,7 +372,16 @@ internal sealed class VisualStationarySetupController(
         string successStatus,
         CancellationToken cancellationToken)
     {
-        VisualProfileSaveResult saved = await store.SaveAsync(profile, cancellationToken);
+        VisualProfileSaveResult saved;
+        try
+        {
+            saved = await store.SaveAsync(profile, cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            setStatus("视觉配置保存失败：" + exception.GetType().Name);
+            return false;
+        }
         if (!saved.Success)
         {
             setStatus("视觉配置失败：" + saved.Code);

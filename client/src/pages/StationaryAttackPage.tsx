@@ -225,15 +225,16 @@ export function StationaryAttackPage() {
               })}>打开实时预览</Button>
               <Button
                 icon={<SafetyCertificateOutlined />}
-                title={visualConfigStatus === 'ready' ? '视觉安全区已配置' : '配置视觉安全区'}
+                aria-label="配置平台安全区"
+                title={visualConfigStatus === 'ready' ? '平台安全区已配置，人物模板继续复用' : '配置平台安全区'}
                 onClick={() => postBridgeCommand({ command: 'openVisualStationarySetup' })}
-              >配置视觉安全区</Button>
+              >配置平台安全区</Button>
               <Tag color={visualConfigStatus === 'ready' ? 'success' : visualConfigStatus === 'viewportMismatch' ? 'warning' : 'default'}>
                 {visualConfigStatusLabel(visualConfigStatus)}
               </Tag>
               <Popconfirm
                 title="清空视觉配置？"
-                description="清空后需要重新框选平台和人物。"
+                description="清空后将删除平台和已采集人物模板。"
                 okText="确定"
                 cancelText="取消"
                 disabled={visualConfigStatus !== 'ready' || running || navigationRunning}

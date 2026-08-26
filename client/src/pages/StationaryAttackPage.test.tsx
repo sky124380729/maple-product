@@ -31,18 +31,19 @@ describe('StationaryAttackPage', () => {
     expect(screen.getByRole('radio', { name: /识别怪物后攻击/ })).toBeDisabled()
   })
 
-  it('offers visual-safe continuous mode and opens native setup without sending coordinates', async () => {
+  it('opens platform-only setup without sending coordinates or replacing character templates', async () => {
     const user = userEvent.setup()
     render(<StationaryAttackPage />)
 
     const visualMode = screen.getByRole('radio', { name: /视觉增强持续攻击/ })
     expect(visualMode).toBeEnabled()
     await user.click(visualMode)
-    await user.click(screen.getByRole('button', { name: /配置视觉安全区/ }))
+    await user.click(screen.getByRole('button', { name: '配置平台安全区' }))
 
     expect(vi.mocked(window.chrome!.webview!.postMessage)).toHaveBeenCalledWith({
       command: 'openVisualStationarySetup',
     })
+    expect(screen.queryByRole('button', { name: '配置视觉安全区' })).not.toBeInTheDocument()
   })
 
   it('clears a configured visual profile only after confirmation', async () => {
