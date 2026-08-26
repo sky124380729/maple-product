@@ -22,14 +22,17 @@ namespace Maple.WindowsHost;
 public partial class MainWindow : Window
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    private static string SessionLogPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "MapleProduct",
+        "sessions.jsonl");
     private readonly JsonConfigStore configStore = new(
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MapleProduct", "stationary.json"));
     private readonly CancellationTokenSource lifetime = new();
     private readonly SemaphoreSlim bridgeCommandGate = new(1, 1);
     private readonly string brokerPath = Path.Combine(AppContext.BaseDirectory, "Maple.InputBroker.exe");
     private readonly HotReloadConfigProvider configProvider = new(StationaryAttackConfig.Default);
-    private readonly JsonLineSessionLog sessionLog = new(
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MapleProduct", "sessions.jsonl"));
+    private readonly JsonLineSessionLog sessionLog = new(SessionLogPath);
     private readonly LastAbnormalTerminationStore abnormalStore = new(
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MapleProduct", "last-abnormal.json"));
     private readonly Diagnostics.WindowsSystemNotificationSink notificationSink = new();
@@ -106,6 +109,7 @@ public partial class MainWindow : Window
             switch (command)
             {
                 case "loadConfig": PublishLoadedConfig(); break;
+                case "loadSessionLog": await LoadSessionLogAsync(); break;
                 case "loadNavigationCatalog": await LoadNavigationCatalogAsync(); break;
                 case "chooseMapDirectory": await ChooseMapDirectoryAsync(); break;
                 case "startNavigation": await StartNavigationAsync(document.RootElement.GetProperty("packagePath").GetString()); break;
@@ -318,6 +322,24 @@ public partial class MainWindow : Window
                 activeCancellation,
                 activeRecognitionSession,
                 activeRecognitionLease));
+    }
+
+    private async Task LoadSessionLogAsync()
+    {
+        try
+        {
+            IReadOnlyList<SessionLogEntry> entries = await new SessionLogReader(SessionLogPath)
+                .ReadLatestAsync(200, lifetime.Token);
+            PublishBridgeMessage(new
+            {
+                type = "session.log.loaded",
+                entries = entries.Select(SessionLogView.From).ToArray()
+            });
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            PublishBridgeMessage(new { type = "session.log.error", error = "SESSION_LOG_READ_FAILED" });
+        }
     }
 
     private async Task StopStationaryAsync(string reason)

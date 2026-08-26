@@ -22,7 +22,7 @@ beforeEach(() => {
 it('loads generic map catalog and starts selected navigation package', async () => {
   const user = userEvent.setup()
   render(<StationaryAttackPage />)
-  await user.click(screen.getByText('自动寻路'))
+  await user.click(screen.getByRole('tab', { name: '地图管理' }))
   act(() => bridgeListener?.(new MessageEvent('message', { data: {
     type: 'navigation.catalog.loaded', directory: 'C:\\maps', entries: [
       { packagePath: 'C:\\maps\\swamp.mapzip', fileName: 'swamp.mapzip', mapName: '沼泽地3', canRun: true, warningCode: null },
@@ -41,7 +41,7 @@ it('loads generic map catalog and starts selected navigation package', async () 
 it('directory button submits only folder selection intent', async () => {
   const user = userEvent.setup()
   render(<StationaryAttackPage />)
-  await user.click(screen.getByText('自动寻路'))
+  await user.click(screen.getByRole('tab', { name: '地图管理' }))
   await user.click(screen.getByRole('button', { name: /选择地图目录/ }))
   expect(vi.mocked(window.chrome!.webview!.postMessage)).toHaveBeenCalledWith({ command: 'chooseMapDirectory' })
 })
@@ -49,7 +49,7 @@ it('directory button submits only folder selection intent', async () => {
 it('clears a selected package when a refreshed catalog no longer contains it', async () => {
   const user = userEvent.setup()
   render(<StationaryAttackPage />)
-  await user.click(screen.getByText('自动寻路'))
+  await user.click(screen.getByRole('tab', { name: '地图管理' }))
   act(() => bridgeListener?.(new MessageEvent('message', { data: {
     type: 'navigation.catalog.loaded', directory: 'C:\\maps', entries: [
       { packagePath: 'C:\\maps\\swamp.mapzip', fileName: 'swamp.mapzip', mapName: '沼泽地3', canRun: true, warningCode: null },

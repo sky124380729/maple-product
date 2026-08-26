@@ -5,11 +5,11 @@ const rangeRule = [{ required: true, message: '请输入有效值' }]
 export function AdvancedParametersCollapse() {
   return (
     <Collapse
-      className="advanced-collapse"
+      className="parameter-collapse"
       items={[
         {
           key: 'advanced',
-          label: '高级调试参数',
+          label: '移动与随机休息',
           children: (
             <div className="parameter-grid">
               <Form.Item label="每侧最大累计偏移" name="maxLateralMoveMs" rules={rangeRule}>

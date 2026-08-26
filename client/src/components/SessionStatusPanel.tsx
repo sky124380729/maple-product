@@ -1,9 +1,9 @@
-import { Alert, Descriptions, Statistic, Tag, Typography } from 'antd'
+import { Descriptions, Statistic, Tag, Typography } from 'antd'
+import { CheckCircleFilled, CloseCircleFilled, InfoCircleFilled, WarningFilled } from '@ant-design/icons'
 import type { SessionState } from '../state/sessionReducer'
-import type { RecognitionSnapshotView, VisualStationaryStateView } from '../bridge/types'
-import { RecognitionStatus } from './RecognitionStatus'
-import { VisualSafetyStatus } from './VisualSafetyStatus'
+import type { VisualStationaryStateView } from '../bridge/types'
 import { formatDurationSeconds, useRhythmCountdown } from '../hooks/useRhythmCountdown'
+import { VisualSafetyStatus } from './VisualSafetyStatus'
 
 const phaseLabels: Record<string, string> = {
   idle: '等待开始',
@@ -29,11 +29,11 @@ const nextPhaseLabels: Record<string, string> = {
 
 export function SessionStatusPanel({
   state,
-  recognition,
+  notices,
   visualSafety,
 }: {
   state: SessionState
-  recognition: RecognitionSnapshotView | null
+  notices: RuntimeNotice[]
   visualSafety: VisualStationaryStateView | null
 }) {
   const remainingMs = useRhythmCountdown(state.rhythm)
@@ -42,48 +42,69 @@ export function SessionStatusPanel({
   const movementTransition = phase === 'attackReleased' || phase === 'moveFirst' || phase === 'moveGap' || phase === 'moveSecond' || phase === 'stabilizing' || phase === 'resting'
 
   return (
-    <section className="status-panel" aria-labelledby="session-status-title">
-      <div className="section-heading compact">
+    <section className="status-surface runtime-status-panel" aria-labelledby="session-status-title">
+      <div className="panel-heading">
         <div>
-          <Typography.Title level={3} id="session-status-title">运行状态</Typography.Title>
-          <Typography.Text type="secondary">Host 发布的权威会话与节奏状态</Typography.Text>
+          <Typography.Title level={2} id="session-status-title">运行状态</Typography.Title>
+          <Typography.Text type="secondary">权威会话与输入节奏</Typography.Text>
         </div>
         <Tag color={active ? 'success' : state.status === 'error' ? 'error' : 'default'}>
           {active ? '运行中' : state.status === 'error' ? '异常' : state.status === 'stopped' ? '已停止' : '待机'}
         </Tag>
       </div>
 
-      {state.error && <Alert type="error" showIcon title="运行异常" description={state.error} />}
-      {state.stopReason && <Alert type="info" showIcon title="会话已停止" description={stopReasonMessage(state.stopReason)} />}
+      <div className="runtime-status-content">
+        <div className="countdown-block" aria-live="polite">
+          <Typography.Text className="countdown-label">
+            {movementTransition ? '下轮攻击前剩余' : '本阶段剩余'}
+          </Typography.Text>
+          <Statistic value={remainingMs / 1000} precision={3} suffix="秒" />
+          <Typography.Text type="secondary">
+            {movementTransition
+              ? '完成左右移动和稳定等待后才会进入下一轮攻击'
+              : `本轮攻击总时长 ${formatDurationSeconds(state.rhythm?.sampledDurationMs ?? 0)}`}
+          </Typography.Text>
+        </div>
 
-      <div className="countdown-block" aria-live="polite">
-        <Typography.Text className="countdown-label">
-          {movementTransition ? '下轮攻击前剩余' : '本阶段剩余'}
-        </Typography.Text>
-        <Statistic value={remainingMs / 1000} precision={3} suffix="秒" />
-        <Typography.Text type="secondary">
-          {movementTransition
-            ? '完成左右移动和稳定等待后才会进入下一轮攻击'
-            : `本轮攻击总时长 ${formatDurationSeconds(state.rhythm?.sampledDurationMs ?? 0)}`}
-        </Typography.Text>
+        <Descriptions column={1} size="small" className="session-details">
+          <Descriptions.Item label="Cycle ID">{state.rhythm?.cycleId ?? '-'}</Descriptions.Item>
+          <Descriptions.Item label="当前阶段">{phaseLabels[phase]}</Descriptions.Item>
+          <Descriptions.Item label="下一阶段">{nextPhaseLabels[phase] ?? '-'}</Descriptions.Item>
+          <Descriptions.Item label="输入状态">{active ? 'Broker 已租约保护' : '未发送输入'}</Descriptions.Item>
+        </Descriptions>
       </div>
-
-      <Descriptions column={1} size="small" className="session-details">
-        <Descriptions.Item label="Cycle ID">{state.rhythm?.cycleId ?? '-'}</Descriptions.Item>
-        <Descriptions.Item label="当前阶段">{phaseLabels[phase]}</Descriptions.Item>
-        <Descriptions.Item label="下一阶段">{nextPhaseLabels[phase] ?? '-'}</Descriptions.Item>
-        <Descriptions.Item label="输入状态">{active ? 'Broker 已租约保护' : '未发送输入'}</Descriptions.Item>
-      </Descriptions>
-
-      <RecognitionStatus
-        snapshot={recognition}
-        relativeOffsetMs={state.status === 'locating' || state.status === 'arming'
-          ? 0
-          : state.rhythm?.relativeOffsetMs ?? null}
-      />
       <VisualSafetyStatus state={visualSafety} />
-
+      <div className="runtime-message-region" data-testid="runtime-message-region" aria-live="polite">
+        {state.error && <RuntimeMessage notice={{ level: 'error', title: '运行异常', message: state.error }} />}
+        {state.stopReason && <RuntimeMessage notice={{ level: 'info', title: '会话已停止', message: stopReasonMessage(state.stopReason) }} />}
+        {notices.map((notice) => <RuntimeMessage key={`${notice.level}-${notice.title}-${notice.message}`} notice={notice} />)}
+        {!state.error && !state.stopReason && notices.length === 0 && (
+          <RuntimeMessage notice={{ level: 'success', title: '系统正常', message: '当前没有待处理问题' }} />
+        )}
+      </div>
     </section>
+  )
+}
+
+export interface RuntimeNotice {
+  level: 'success' | 'info' | 'warning' | 'error'
+  title: string
+  message: string
+}
+
+function RuntimeMessage({ notice }: { notice: RuntimeNotice }) {
+  const icons = {
+    success: <CheckCircleFilled />,
+    info: <InfoCircleFilled />,
+    warning: <WarningFilled />,
+    error: <CloseCircleFilled />,
+  }
+  return (
+    <div className={`runtime-message runtime-message-${notice.level}`}>
+      {icons[notice.level]}
+      <Typography.Text strong>{notice.title}</Typography.Text>
+      <Typography.Text ellipsis={{ tooltip: notice.message }}>{notice.message}</Typography.Text>
+    </div>
   )
 }
 

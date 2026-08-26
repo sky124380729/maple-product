@@ -1,34 +1,30 @@
-import { Descriptions, Tag, Typography } from 'antd'
+import { Tag, Typography } from 'antd'
 import type { VisualStationaryStateView } from '../bridge/types'
 
 export function VisualSafetyStatus({ state }: { state: VisualStationaryStateView | null }) {
-  if (!state) return null
-  const label = statusLabel(state.status)
-  const color = state.status.toLowerCase() === 'safe'
+  const label = state ? statusLabel(state.status) : '无数据'
+  const color = state?.status.toLowerCase() === 'safe'
     ? 'success'
-    : state.status.toLowerCase().includes('guard') || state.status.toLowerCase().includes('fallback')
+    : state && (state.status.toLowerCase().includes('guard') || state.status.toLowerCase().includes('fallback'))
       ? 'warning'
-      : 'error'
+      : state ? 'error' : 'default'
   return (
-    <section className="visual-safety-status" aria-labelledby="visual-safety-title">
+    <section className="visual-safety-status" aria-label="视觉平台保护">
       <div className="visual-safety-heading">
-        <Typography.Title level={4} id="visual-safety-title">视觉平台保护</Typography.Title>
+        <Typography.Text strong>视觉平台保护</Typography.Text>
         <Tag color={color}>{label}</Tag>
       </div>
-      <Descriptions column={1} size="small">
-        <Descriptions.Item label="识别目标">
-          {state.identityKind === 'CharacterAppearance' ? '人物外观' : '名字模板'}
-        </Descriptions.Item>
-        <Descriptions.Item label={state.status.toLowerCase() === 'fallbackcontinuous' ? '预测位置' : '实际位置'}>
-          <Typography.Text strong data-testid="visual-offset">{formatPixelOffset(state.visualOffsetPx)}</Typography.Text>
-        </Descriptions.Item>
-        <Descriptions.Item label={state.identityKind === 'CharacterAppearance' ? '人物匹配' : '名字匹配'}>
-          {Math.round(state.bestScore * 100)}%
-        </Descriptions.Item>
-        <Descriptions.Item label="保护带">{state.guardWidthPx} px</Descriptions.Item>
-      </Descriptions>
+      <div className="visual-safety-facts">
+        <SafetyFact label="识别目标" value={state ? state.identityKind === 'CharacterAppearance' ? '人物外观' : '名字模板' : '-'} />
+        <SafetyFact label={state?.identityKind === 'CharacterAppearance' ? '人物匹配' : '名字匹配'} value={state ? `${Math.round(state.bestScore * 100)}%` : '-'} />
+        <SafetyFact label="保护带" value={state ? `${state.guardWidthPx} px` : '-'} />
+      </div>
     </section>
   )
+}
+
+function SafetyFact({ label, value }: { label: string; value: string }) {
+  return <span><Typography.Text type="secondary">{label}</Typography.Text><Typography.Text>{value}</Typography.Text></span>
 }
 
 function statusLabel(status: string): string {
@@ -40,11 +36,4 @@ function statusLabel(status: string): string {
   if (normalized === 'fallbackcontinuous') return '持续攻击回退'
   if (normalized === 'untrusted') return '识别暂失，移动冻结'
   return '正在锁定'
-}
-
-function formatPixelOffset(value: number | null): string {
-  if (value == null) return '-'
-  if (value < 0) return `${value} px（左）`
-  if (value > 0) return `+${value} px（右）`
-  return '0 px（中心）'
 }

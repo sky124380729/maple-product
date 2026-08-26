@@ -1,30 +1,42 @@
 import { useCallback, useEffect, useReducer, useState } from 'react'
 import {
-  Alert,
   Button,
   ConfigProvider,
   Form,
   InputNumber,
+  message,
   Modal,
   Popconfirm,
-  Segmented,
   Select,
   Space,
+  Tabs,
   Tag,
   Typography,
   theme,
 } from 'antd'
-import { ArrowLeftOutlined, ArrowRightOutlined, DeleteOutlined, EyeOutlined, PlayCircleOutlined, SafetyCertificateOutlined, SaveOutlined, StopOutlined, VideoCameraOutlined } from '@ant-design/icons'
+import {
+  ArrowLeftOutlined,
+  ArrowRightOutlined,
+  DeleteOutlined,
+  EyeOutlined,
+  FileTextOutlined,
+  PlayCircleOutlined,
+  SafetyCertificateOutlined,
+  SaveOutlined,
+  StopOutlined,
+} from '@ant-design/icons'
 import { AttackModeField } from '../components/AttackModeField'
 import { AttackBandsEditor } from '../components/AttackBandsEditor'
 import { AdvancedParametersCollapse } from '../components/AdvancedParametersCollapse'
-import { SessionStatusPanel } from '../components/SessionStatusPanel'
+import { SessionStatusPanel, type RuntimeNotice } from '../components/SessionStatusPanel'
 import { RecognitionToggle } from '../components/RecognitionToggle'
-import { NavigationControls } from '../components/NavigationControls'
-import { NavigationStatus } from '../components/NavigationStatus'
+import { CharacterStatusPanel } from '../components/CharacterStatusPanel'
+import { MapManagementPanel } from '../components/MapManagementPanel'
+import { RuntimeLogModal } from '../components/RuntimeLogModal'
 import { postBridgeCommand, subscribeBridgeMessages } from '../bridge/bridge'
 import { safeDefaults, type RecognitionSnapshotView, type StationaryAttackConfig, type VisualStationaryStateView } from '../bridge/types'
 import type { NavigationCatalogEntry, NavigationStateView } from '../bridge/navigationTypes'
+import type { SessionLogEntryView } from '../bridge/sessionLogTypes'
 import { hostErrorMessage, validateStationaryConfig, type ConfigValidationError } from '../bridge/configValidation'
 import { initialSessionState, sessionReducer } from '../state/sessionReducer'
 import '../styles/app.css'
@@ -33,6 +45,7 @@ const attackKeys = ['Ctrl', 'Shift', 'Space', 'A', 'S', 'D', 'F', 'Z', 'X', 'C',
 
 export function StationaryAttackPage() {
   const [form] = Form.useForm<StationaryAttackConfig>()
+  const [messageApi, messageContext] = message.useMessage()
   const [session, dispatch] = useReducer(sessionReducer, initialSessionState)
   const [saving, setSaving] = useState(false)
   const [configWarning, setConfigWarning] = useState<string | null>(null)
@@ -42,13 +55,17 @@ export function StationaryAttackPage() {
   const [recognition, setRecognition] = useState<RecognitionSnapshotView | null>(null)
   const [visualSafety, setVisualSafety] = useState<VisualStationaryStateView | null>(null)
   const [visualConfigStatus, setVisualConfigStatus] = useState<string>('notConfigured')
-  const [mode, setMode] = useState<'stationary' | 'navigation'>('stationary')
+  const [activeTab, setActiveTab] = useState<'attack' | 'maps'>('attack')
   const [mapDirectory, setMapDirectory] = useState<string | null>(null)
   const [mapEntries, setMapEntries] = useState<NavigationCatalogEntry[]>([])
   const [selectedMap, setSelectedMap] = useState<string | null>(null)
   const [navigationRunning, setNavigationRunning] = useState(false)
   const [navigationState, setNavigationState] = useState<NavigationStateView | null>(null)
   const [navigationError, setNavigationError] = useState<string | null>(null)
+  const [logOpen, setLogOpen] = useState(false)
+  const [logLoading, setLogLoading] = useState(false)
+  const [logError, setLogError] = useState<string | null>(null)
+  const [logEntries, setLogEntries] = useState<SessionLogEntryView[]>([])
   const running = session.status === 'running' || session.status === 'locating' || session.status === 'arming'
 
   const applyHostValidationErrors = useCallback((errors: Array<{ field: string; code: string }>) => {
@@ -60,9 +77,9 @@ export function StationaryAttackPage() {
   }, [form])
 
   useEffect(() => {
-    const unsubscribe = subscribeBridgeMessages((message) => {
-      if (!message || typeof message !== 'object') return
-      const data = message as {
+    const unsubscribe = subscribeBridgeMessages((bridgeMessage) => {
+      if (!bridgeMessage || typeof bridgeMessage !== 'object') return
+      const data = bridgeMessage as {
         type?: string
         state?: typeof session.rhythm | NavigationStateView | VisualStationaryStateView
         reason?: string
@@ -73,7 +90,7 @@ export function StationaryAttackPage() {
         record?: { reason?: string; stoppedAtUtc?: string }
         snapshot?: RecognitionSnapshotView
         directory?: string | null
-        entries?: NavigationCatalogEntry[]
+        entries?: NavigationCatalogEntry[] | SessionLogEntryView[]
       }
       if (data.type === 'config.loaded' && data.config) {
         form.setFieldsValue({ ...data.config, attackBands: data.config.attackBands.map((band) => ({ ...band })) })
@@ -82,6 +99,7 @@ export function StationaryAttackPage() {
       if (data.type === 'config.saved') {
         setSaving(false)
         setConfigError(null)
+        void messageApi.success('配置已保存')
       }
       if (data.type === 'stationary.rhythm.updated' && data.state) dispatch({ type: 'rhythmUpdated', payload: data.state as NonNullable<typeof session.rhythm> })
       if (data.type === 'stationary.stopped') {
@@ -94,9 +112,13 @@ export function StationaryAttackPage() {
       if (data.type === 'stationary.error') {
         const messageText = hostErrorMessage(data.error ?? '运行异常')
         setSaving(false)
-        setConfigError(messageText)
         applyHostValidationErrors(data.validationErrors ?? [])
-        if (!isConfigurationError(data.error)) dispatch({ type: 'failed', error: messageText })
+        if (isConfigurationError(data.error)) {
+          setConfigError(messageText)
+        } else {
+          setConfigError(null)
+          dispatch({ type: 'failed', error: messageText })
+        }
       }
       if (data.type === 'stationary.abnormalTermination' && data.record?.reason) {
         setAbnormalTermination(data.record.reason === 'SESSION_IN_PROGRESS'
@@ -114,7 +136,7 @@ export function StationaryAttackPage() {
       }
       if (data.type === 'navigation.catalog.loaded') {
         setMapDirectory(data.directory ?? null)
-        const entries = data.entries ?? []
+        const entries = (data.entries ?? []) as NavigationCatalogEntry[]
         setMapEntries(entries)
         setSelectedMap((current) => current && entries.some((entry) => entry.packagePath === current && entry.canRun) ? current : null)
       }
@@ -122,11 +144,20 @@ export function StationaryAttackPage() {
       if (data.type === 'navigation.state.updated' && data.state) setNavigationState(data.state as NavigationStateView)
       if (data.type === 'navigation.stopped') setNavigationRunning(false)
       if (data.type === 'navigation.error') { setNavigationRunning(false); setNavigationError(data.error ?? 'NAVIGATION_FAILED') }
+      if (data.type === 'session.log.loaded') {
+        setLogEntries((data.entries ?? []) as SessionLogEntryView[])
+        setLogLoading(false)
+        setLogError(null)
+      }
+      if (data.type === 'session.log.error') {
+        setLogLoading(false)
+        setLogError('运行日志读取失败')
+      }
     })
     postBridgeCommand({ command: 'loadConfig' })
     postBridgeCommand({ command: 'loadNavigationCatalog' })
     return unsubscribe
-  }, [applyHostValidationErrors, form])
+  }, [applyHostValidationErrors, form, messageApi])
 
   const validatedConfig = async (): Promise<StationaryAttackConfig | null> => {
     try {
@@ -183,156 +214,197 @@ export function StationaryAttackPage() {
     setNavigationRunning(false)
   }
 
+  const openPreview = () => postBridgeCommand({
+    command: 'openPreview',
+    recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),
+  })
+
+  const loadLogs = () => {
+    setLogLoading(true)
+    setLogError(null)
+    postBridgeCommand({ command: 'loadSessionLog' })
+  }
+
+  const openLogs = () => {
+    setLogOpen(true)
+    loadLogs()
+  }
+
+  const runtimeNotices: RuntimeNotice[] = [
+    ...(configError ? [{ level: 'error' as const, title: '配置错误', message: configError }] : []),
+    ...(configWarning ? [{ level: 'warning' as const, title: '配置提示', message: configWarning }] : []),
+    ...(abnormalTermination ? [{ level: 'warning' as const, title: '异常终止', message: abnormalTermination }] : []),
+  ]
+  const relativeOffsetMs = session.status === 'locating' || session.status === 'arming'
+    ? 0
+    : session.rhythm?.relativeOffsetMs ?? null
+
   return (
     <ConfigProvider
       theme={{
         algorithm: theme.defaultAlgorithm,
         token: {
-          colorPrimary: '#167e72',
-          colorInfo: '#167e72',
-          borderRadius: 8,
-          borderRadiusLG: 12,
+          colorPrimary: '#14786f',
+          colorInfo: '#14786f',
+          colorText: '#18211f',
+          colorTextSecondary: '#68726f',
+          colorBgLayout: '#f1f4f3',
+          colorBorder: '#d7dddb',
+          borderRadius: 6,
+          borderRadiusLG: 8,
+          controlHeight: 34,
           fontFamily: '"Segoe UI Variable", "Segoe UI", system-ui, sans-serif',
         },
       }}
     >
+      {messageContext}
       <main className="app-shell">
         <header className="app-header">
-          <div>
-            <Typography.Title level={1}>Maple Product</Typography.Title>
-            <Typography.Text type="secondary">Windows x64 定点持续攻击配置</Typography.Text>
+          <div className="brand-lockup">
+            <div className="brand-mark" aria-hidden="true">M</div>
+            <div>
+              <Typography.Title level={1}>Maple Product</Typography.Title>
+              <Typography.Text type="secondary">Windows x64 控制台</Typography.Text>
+            </div>
           </div>
-          <div className="header-controls">
-            <Segmented
-              value={mode}
-              disabled={running || navigationRunning}
-              onChange={(value) => setMode(value as 'stationary' | 'navigation')}
-              options={[{ label: '定点攻击', value: 'stationary' }, { label: '自动寻路', value: 'navigation' }]}
-            />
-            {mode === 'stationary' && <>
-            <Form form={form} component={false}>
-              <RecognitionToggle />
-            </Form>
-            <Space wrap>
-              <Button icon={<VideoCameraOutlined />} onClick={() => postBridgeCommand({
-                command: 'startMapRecording',
-                recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),
-              })}>录制地图</Button>
-              <Button danger icon={<StopOutlined />} onClick={() => postBridgeCommand({ command: 'stopMapRecording' })}>停止录制地图</Button>
-              <Button icon={<EyeOutlined />} onClick={() => postBridgeCommand({
-                command: 'openPreview',
-                recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),
-              })}>打开实时预览</Button>
-              <Button
-                icon={<SafetyCertificateOutlined />}
-                aria-label="配置平台安全区"
-                title={visualConfigStatus === 'ready' ? '平台安全区已配置，人物模板继续复用' : '配置平台安全区'}
-                onClick={() => postBridgeCommand({ command: 'openVisualStationarySetup' })}
-              >配置平台安全区</Button>
-              <Tag color={visualConfigStatus === 'ready' ? 'success' : visualConfigStatus === 'viewportMismatch' ? 'warning' : 'default'}>
-                {visualConfigStatusLabel(visualConfigStatus)}
-              </Tag>
-              <Popconfirm
-                title="清空视觉配置？"
-                description="清空后将删除平台和已采集人物模板。"
-                okText="确定"
-                cancelText="取消"
-                disabled={visualConfigStatus !== 'ready' || running || navigationRunning}
-                onConfirm={() => postBridgeCommand({ command: 'clearVisualStationaryProfile' })}
-              >
-                <Button
-                  danger
-                  aria-label="清空视觉配置"
-                  icon={<DeleteOutlined />}
-                  disabled={visualConfigStatus !== 'ready' || running || navigationRunning}
-                >清空视觉配置</Button>
-              </Popconfirm>
-              <Button icon={<SaveOutlined />} loading={saving} onClick={save}>保存配置</Button>
-              {running ? (
-                <Button danger type="primary" icon={<StopOutlined />} onClick={stop}>停止</Button>
-              ) : (
-                <Button type="primary" icon={<PlayCircleOutlined />} onClick={start}>开始</Button>
-              )}
-            </Space>
-            </>}
-          </div>
+          <Tabs
+            className="primary-tabs"
+            activeKey={activeTab}
+            onChange={(key) => setActiveTab(key as 'attack' | 'maps')}
+            items={[
+              { key: 'attack', label: '定点攻击', disabled: navigationRunning },
+              { key: 'maps', label: '地图管理', disabled: running },
+            ]}
+          />
+          <Space className="header-actions" size="small">
+            <Button aria-label="运行日志" title="运行日志" icon={<FileTextOutlined />} onClick={openLogs}>日志</Button>
+            <Button aria-label="打开实时预览" title="打开实时预览" icon={<EyeOutlined />} onClick={openPreview}>预览</Button>
+            {activeTab === 'attack' && (
+              <>
+                <Button title="保存配置" icon={<SaveOutlined />} loading={saving} onClick={save}>保存配置</Button>
+                {running
+                  ? <Button title="停止" danger type="primary" icon={<StopOutlined />} onClick={stop}>停止</Button>
+                  : <Button title="开始" type="primary" icon={<PlayCircleOutlined />} onClick={start}>开始</Button>}
+              </>
+            )}
+          </Space>
         </header>
 
-        <Alert
-          className="safety-notice"
-          type="info"
-          showIcon
-          title="输入安全边界"
-          description="开始后会自动定位并校验目标窗口。运行期间请保持游戏窗口为当前前台窗口；失焦会立即停止且不会自动恢复。"
-        />
+        {activeTab === 'attack' ? (
+          <div className="attack-workspace">
+            <div className="status-grid">
+              <CharacterStatusPanel
+                recognition={recognition}
+                visualSafety={visualSafety}
+                relativeOffsetMs={relativeOffsetMs}
+              />
+              <SessionStatusPanel state={session} notices={runtimeNotices} visualSafety={visualSafety} />
+            </div>
 
-        {configWarning && <Alert className="config-message" type="warning" showIcon title="配置加载提示" description={configWarning} />}
-        {configError && <Alert className="config-message" type="error" showIcon title="配置错误" description={configError} />}
-        {abnormalTermination && <Alert className="config-message" type="warning" showIcon title="异常终止记录" description={abnormalTermination} />}
-
-        <div className="workspace-grid">
-          {mode === 'stationary' ? <>
-          <Form
-            form={form}
-            layout="vertical"
-            initialValues={safeDefaults}
-            requiredMark="optional"
-            className="configuration-panel"
-          >
-            <section className="config-section">
-              <div className="section-heading">
+            <Form
+              form={form}
+              layout="vertical"
+              initialValues={safeDefaults}
+              requiredMark={false}
+              className="configuration-panel"
+            >
+              <div className="configuration-heading">
                 <div>
-                  <Typography.Title level={2}>基础配置</Typography.Title>
-                  <Typography.Text type="secondary">设置攻击模式和输入按键</Typography.Text>
+                  <Typography.Title level={2}>攻击设置</Typography.Title>
+                  <Typography.Text type="secondary">基础选项常显，详细参数按需展开</Typography.Text>
+                </div>
+                <Space className="visual-profile-actions" size="small" wrap>
+                  <Button
+                    icon={<SafetyCertificateOutlined />}
+                    aria-label="配置平台安全区"
+                    title={visualConfigStatus === 'ready' ? '平台安全区已配置，人物模板继续复用' : '配置平台安全区'}
+                    onClick={() => postBridgeCommand({ command: 'openVisualStationarySetup' })}
+                  >配置平台</Button>
+                  <Tag color={visualConfigStatus === 'ready' ? 'success' : visualConfigStatus === 'viewportMismatch' ? 'warning' : 'default'}>
+                    {visualConfigStatusLabel(visualConfigStatus)}
+                  </Tag>
+                  <Popconfirm
+                    title="清空视觉配置？"
+                    description="清空后将删除平台和已采集人物模板。"
+                    okText="确定"
+                    cancelText="取消"
+                    disabled={visualConfigStatus !== 'ready' || running || navigationRunning}
+                    onConfirm={() => postBridgeCommand({ command: 'clearVisualStationaryProfile' })}
+                  >
+                    <Button
+                      danger
+                      aria-label="清空视觉配置"
+                      icon={<DeleteOutlined />}
+                      disabled={visualConfigStatus !== 'ready' || running || navigationRunning}
+                    />
+                  </Popconfirm>
+                </Space>
+              </div>
+
+              <div className="base-configuration-grid">
+                <AttackModeField />
+                <div className="essential-settings">
+                  <div className="target-status-line">
+                    <span className="target-status-dot" />
+                    <div>
+                      <Typography.Text strong>客户端</Typography.Text>
+                      <Typography.Text type="secondary">自动检测正在运行的冒险岛怀旧服客户端</Typography.Text>
+                    </div>
+                  </div>
+                  <div className="basic-grid">
+                    <Form.Item label="攻击键" name="attackKey" rules={[{ required: true }]}>
+                      <Select options={attackKeys.map((value) => ({ value, label: value }))} />
+                    </Form.Item>
+                    <Form.Item label="攻击硬上限">
+                      <InputNumber value={60000} disabled suffix="ms" />
+                    </Form.Item>
+                  </div>
+                  <RecognitionToggle />
                 </div>
               </div>
 
-              <Alert
-                type="info"
-                showIcon
-                title="自动检测客户端"
-                description="自动检测正在运行的冒险岛怀旧服客户端"
-              />
-
-              <AttackModeField />
-
-              <div className="basic-grid">
-                <Form.Item label="攻击键" name="attackKey" rules={[{ required: true }]}>
-                  <Select options={attackKeys.map((value) => ({ value, label: value }))} />
-                </Form.Item>
-                <Form.Item label="攻击硬上限">
-                  <InputNumber value={60000} disabled suffix="ms" />
-                </Form.Item>
+              <div className="parameter-collapse-grid">
+                <AttackBandsEditor />
+                <AdvancedParametersCollapse />
               </div>
-            </section>
 
-            <AttackBandsEditor />
-
-            <AdvancedParametersCollapse />
-
-            <Space className="form-footer" wrap>
-              <Button onClick={() => { form.setFieldsValue(safeDefaults); form.setFields([]); setConfigError(null) }}>恢复安全默认值</Button>
-              <Typography.Text type="secondary">运行中保存的节奏参数从下一完整周期生效</Typography.Text>
-            </Space>
-          </Form>
-
-          <SessionStatusPanel state={session} recognition={recognition} visualSafety={visualSafety} />
-          </> : <>
-            <NavigationControls
-              directory={mapDirectory}
-              entries={mapEntries}
-              selected={selectedMap}
-              running={navigationRunning}
-              error={navigationError}
-              onChooseDirectory={() => postBridgeCommand({ command: 'chooseMapDirectory' })}
-              onSelect={setSelectedMap}
-              onStart={startNavigation}
-              onStop={stopNavigation}
-            />
-            <NavigationStatus state={navigationState} running={navigationRunning} />
-          </>}
-        </div>
+              <div className="form-footer">
+                <Button onClick={() => { form.setFieldsValue(safeDefaults); form.setFields([]); setConfigError(null) }}>恢复安全默认值</Button>
+                <Typography.Text type="secondary">运行中保存的节奏参数从下一完整周期生效</Typography.Text>
+              </div>
+            </Form>
+          </div>
+        ) : (
+          <MapManagementPanel
+            recognitionEnabled={Boolean(form.getFieldValue('recognitionEnabled'))}
+            directory={mapDirectory}
+            entries={mapEntries}
+            selected={selectedMap}
+            running={navigationRunning}
+            error={navigationError}
+            navigationState={navigationState}
+            onRecord={() => postBridgeCommand({
+              command: 'startMapRecording',
+              recognitionEnabled: Boolean(form.getFieldValue('recognitionEnabled')),
+            })}
+            onStopRecording={() => postBridgeCommand({ command: 'stopMapRecording' })}
+            onChooseDirectory={() => postBridgeCommand({ command: 'chooseMapDirectory' })}
+            onSelect={setSelectedMap}
+            onStart={startNavigation}
+            onStop={stopNavigation}
+          />
+        )}
       </main>
+
+      <RuntimeLogModal
+        open={logOpen}
+        loading={logLoading}
+        entries={logEntries}
+        error={logError}
+        onClose={() => setLogOpen(false)}
+        onRefresh={loadLogs}
+      />
+
       <Modal
         title="人物当前朝向"
         open={pendingStartConfig !== null}
@@ -388,10 +460,10 @@ function configWarningMessage(code: string): string {
 }
 
 function visualConfigStatusLabel(status: string): string {
-  if (status === 'ready') return '视觉配置：可用'
-  if (status === 'viewportMismatch') return '视觉配置：画面尺寸已变化'
-  if (status === 'invalid') return '视觉配置：无效'
-  return '视觉配置：未配置'
+  if (status === 'ready') return '视觉可用'
+  if (status === 'viewportMismatch') return '画面已变化'
+  if (status === 'invalid') return '视觉无效'
+  return '视觉未配置'
 }
 
 function isConfigurationError(code: string | undefined): boolean {

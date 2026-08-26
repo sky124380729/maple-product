@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { safeDefaults } from '../bridge/types'
@@ -29,6 +29,73 @@ describe('StationaryAttackPage', () => {
     expect(screen.getByText('识别怪物后攻击')).toBeVisible()
     expect(screen.getByText('后续版本开放')).toBeVisible()
     expect(screen.getByRole('radio', { name: /识别怪物后攻击/ })).toBeDisabled()
+  })
+
+  it('places character state before runtime state without the legacy safety banner', () => {
+    render(<StationaryAttackPage />)
+
+    const character = screen.getByRole('heading', { name: '角色状态' })
+    const runtime = screen.getByRole('heading', { name: '运行状态' })
+    expect(character.compareDocumentPosition(runtime) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByText('输入安全边界')).not.toBeInTheDocument()
+  })
+
+  it('keeps recording and map catalog controls inside the map management tab', async () => {
+    const user = userEvent.setup()
+    render(<StationaryAttackPage />)
+
+    expect(screen.queryByRole('button', { name: 'video-camera 录制地图' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'folder-open 选择地图目录' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: '地图管理' }))
+
+    expect(screen.getByRole('button', { name: 'video-camera 录制地图' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'folder-open 选择地图目录' })).toBeVisible()
+  })
+
+  it('opens a read-only runtime log dialog on demand', async () => {
+    const user = userEvent.setup()
+    render(<StationaryAttackPage />)
+
+    await user.click(screen.getByRole('button', { name: '运行日志' }))
+
+    expect(await screen.findByRole('dialog', { name: '运行日志' })).toBeInTheDocument()
+    expect(vi.mocked(window.chrome!.webview!.postMessage)).toHaveBeenCalledWith({
+      command: 'loadSessionLog',
+    })
+    expect(vi.mocked(window.chrome!.webview!.postMessage)).not.toHaveBeenCalledWith(expect.objectContaining({ command: 'startStationary' }))
+    expect(vi.mocked(window.chrome!.webview!.postMessage)).not.toHaveBeenCalledWith(expect.objectContaining({ command: 'stopStationary' }))
+  })
+
+  it('renders structured Host records in the runtime log dialog', async () => {
+    const user = userEvent.setup()
+    render(<StationaryAttackPage />)
+
+    await user.click(screen.getByRole('button', { name: '运行日志' }))
+    act(() => bridgeListener?.(new MessageEvent('message', {
+      data: {
+        type: 'session.log.loaded',
+        entries: [{
+          timestampUtc: '2026-08-26T02:00:00Z', sessionId: 'session-a', cycleId: 18,
+          phase: 'MoveSecond', event: 'keyUp', resultCode: 'OK',
+          brokerSequence: 0, direction: 'Right', offsetAfterMs: 36,
+        }],
+      },
+    })))
+
+    expect(screen.getByText('MoveSecond')).toBeInTheDocument()
+    expect(screen.getByText('keyUp')).toBeInTheDocument()
+    expect(screen.getByText('+36 ms')).toBeInTheDocument()
+  })
+
+  it('confirms successful config persistence', async () => {
+    const user = userEvent.setup()
+    render(<StationaryAttackPage />)
+
+    await user.click(screen.getByRole('button', { name: /保存配置/ }))
+    act(() => bridgeListener?.(new MessageEvent('message', { data: { type: 'config.saved' } })))
+
+    expect(await screen.findByText('配置已保存')).toBeInTheDocument()
   })
 
   it('opens platform-only setup without sending coordinates or replacing character templates', async () => {
@@ -72,7 +139,7 @@ describe('StationaryAttackPage', () => {
     })))
 
     expect(screen.getByText('运行中')).toBeVisible()
-    expect(screen.getByText('运行期间不能清空视觉配置')).toBeVisible()
+    expect(screen.getByTestId('runtime-message-region')).toHaveTextContent('运行期间不能清空视觉配置')
   })
 
   it('shows structured visual safety and signed pixel offset from Host', () => {
@@ -97,11 +164,15 @@ describe('StationaryAttackPage', () => {
       },
     })))
 
-    expect(screen.getByText('左侧保护区')).toBeVisible()
-    expect(screen.getByTestId('visual-offset')).toHaveTextContent('-42 px（左）')
-    expect(screen.getByText('人物外观')).toBeVisible()
-    expect(screen.getByText('人物匹配')).toBeVisible()
-    expect(screen.getByText('98%')).toBeVisible()
+    const characterPanel = screen.getByRole('heading', { name: '角色状态' }).closest('section')!
+    const runtimePanel = screen.getByRole('heading', { name: '运行状态' }).closest('section')!
+    expect(within(characterPanel).getByTestId('visual-offset')).toHaveTextContent('-42 px（左）')
+    expect(within(characterPanel).queryByText('视觉平台保护')).not.toBeInTheDocument()
+    expect(within(runtimePanel).getByText('视觉平台保护')).toBeVisible()
+    expect(within(runtimePanel).getByText('左侧保护区')).toBeVisible()
+    expect(within(runtimePanel).getByText('人物外观')).toBeVisible()
+    expect(within(runtimePanel).getByText('人物匹配')).toBeVisible()
+    expect(within(runtimePanel).getByText('98%')).toBeVisible()
   })
 
   it('shows when visual protection has switched to continuous fallback', () => {
@@ -129,10 +200,12 @@ describe('StationaryAttackPage', () => {
     expect(screen.getByText('持续攻击回退')).toBeVisible()
   })
 
-  it('keeps advanced debugging parameters collapsed by default', () => {
+  it('keeps attack bands and movement parameters collapsed by default', () => {
     render(<StationaryAttackPage />)
 
-    expect(screen.getByText('高级调试参数')).toBeVisible()
+    expect(screen.getByText('攻击时长分段')).toBeVisible()
+    expect(screen.getByText('移动与随机休息')).toBeVisible()
+    expect(screen.queryByLabelText('分段 1 最小值')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('每侧最大累计偏移')).not.toBeInTheDocument()
   })
 
@@ -140,15 +213,18 @@ describe('StationaryAttackPage', () => {
     const user = userEvent.setup()
     render(<StationaryAttackPage />)
 
-    await user.click(screen.getByText('高级调试参数'))
+    await user.click(screen.getByText('移动与随机休息'))
 
     expect(screen.getByLabelText('每侧最大累计偏移')).toHaveAttribute('aria-valuemin', '1')
   })
 
-  it('exposes all four attack duration bands as editable fields', () => {
+  it('exposes all four attack duration bands after expansion', async () => {
+    const user = userEvent.setup()
     render(<StationaryAttackPage />)
 
     expect(screen.getByText('攻击时长分段')).toBeVisible()
+    expect(screen.queryByLabelText('分段 1 最小值')).not.toBeInTheDocument()
+    await user.click(screen.getByText('攻击时长分段'))
     expect(screen.getByLabelText('分段 1 最小值')).toHaveValue('1000')
     expect(screen.getByLabelText('分段 2 最大值')).toHaveValue('20000')
     expect(screen.getByLabelText('分段 3 权重')).toHaveValue('1')
@@ -186,6 +262,16 @@ describe('StationaryAttackPage', () => {
     })))
 
     expect(screen.getByText('四段攻击权重总和必须为 100%')).toBeVisible()
+  })
+
+  it('shows a runtime failure once without duplicating it as a config error', () => {
+    render(<StationaryAttackPage />)
+
+    act(() => bridgeListener?.(new MessageEvent('message', {
+      data: { type: 'stationary.error', error: 'WINDOW_NOT_FOUND' },
+    })))
+
+    expect(screen.getAllByText('WINDOW_NOT_FOUND')).toHaveLength(1)
   })
 
   it('shows character and resource recognition from the Host snapshot', () => {
@@ -263,6 +349,7 @@ describe('StationaryAttackPage', () => {
     const user = userEvent.setup()
     render(<StationaryAttackPage />)
 
+    await user.click(screen.getByRole('tab', { name: '地图管理' }))
     await user.click(screen.getByRole('button', { name: 'video-camera 录制地图' }))
 
     expect(vi.mocked(window.chrome!.webview!.postMessage)).toHaveBeenCalledWith({
@@ -274,6 +361,7 @@ describe('StationaryAttackPage', () => {
     const user = userEvent.setup()
     render(<StationaryAttackPage />)
 
+    await user.click(screen.getByRole('tab', { name: '地图管理' }))
     await user.click(screen.getByRole('button', { name: /停止录制地图/ }))
 
     expect(vi.mocked(window.chrome!.webview!.postMessage)).toHaveBeenCalledWith({

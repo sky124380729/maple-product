@@ -5,9 +5,11 @@ import type { RecognitionSnapshotView } from '../bridge/types'
 export function RecognitionStatus({
   snapshot,
   relativeOffsetMs,
+  visualOffsetPx,
 }: {
   snapshot: RecognitionSnapshotView | null
   relativeOffsetMs: number | null
+  visualOffsetPx: number | null
 }) {
   const [elapsedMs, setElapsedMs] = useState(0)
   const snapshotKey = snapshot == null ? 'none' : [snapshot.health, snapshot.faultCode, snapshot.hud.characterName, snapshot.hud.level, snapshot.hud.job, snapshot.hud.hpCurrent, snapshot.hud.hpMax, snapshot.hud.mpCurrent, snapshot.hud.mpMax, snapshot.hud.expPercent].join('|')
@@ -25,25 +27,27 @@ export function RecognitionStatus({
     : snapshot?.health
   const fresh = health === 'running'
   return (
-    <section className="recognition-status" aria-labelledby="recognition-status-title">
-      <div className="recognition-status-heading">
-        <div>
-          <Typography.Title level={4} id="recognition-status-title">角色识别</Typography.Title>
-          <Typography.Text type="secondary">Host 实时识别结果</Typography.Text>
+    <div className="recognition-status">
+      <div className="identity-row">
+        <div className="identity-copy">
+          <Typography.Text strong>{hud?.characterName || '未识别角色'}</Typography.Text>
+          <Typography.Text>{hud?.level == null ? 'Lv.-' : `Lv.${hud.level}`}</Typography.Text>
+          <Typography.Text type="secondary">{hud?.job || '职业未识别'}</Typography.Text>
         </div>
         <Tag color={fresh ? 'success' : health === 'faulted' ? 'error' : 'default'}>
           {fresh ? '识别中' : health ? healthLabel(health) : '无数据'}
         </Tag>
       </div>
-      <div className="identity-row">
-        <Typography.Text strong>{hud?.characterName || '未识别角色'}</Typography.Text>
-        <Typography.Text>{hud?.level == null ? 'Lv.-' : `Lv.${hud.level}`}</Typography.Text>
-        <Typography.Text type="secondary">{hud?.job || '职业未识别'}</Typography.Text>
-      </div>
       <div className="recognition-offset-row">
         <Typography.Text type="secondary">计算偏移</Typography.Text>
         <Typography.Text strong data-testid="relative-offset">
           {formatRelativeOffset(relativeOffsetMs)}
+        </Typography.Text>
+      </div>
+      <div className="recognition-offset-row">
+        <Typography.Text type="secondary">视觉像素偏移</Typography.Text>
+        <Typography.Text strong data-testid="visual-offset">
+          {formatPixelOffset(visualOffsetPx)}
         </Typography.Text>
       </div>
       <ResourceRow label="HP" current={hud?.hpCurrent} maximum={hud?.hpMax} ratio={hud?.hpPercent} color="#d94a4a" />
@@ -53,11 +57,9 @@ export function RecognitionStatus({
         <Typography.Text type="secondary">置信度 {hud ? `${Math.round(hud.confidence * 100)}%` : '-'}</Typography.Text>
         <span className="recognition-age"><Typography.Text type="secondary">帧龄</Typography.Text><Typography.Text type="secondary">{frameAgeMs == null ? '-' : `${frameAgeMs} ms`}</Typography.Text></span>
       </div>
-      <div>
-        <Progress className="recognition-exp-progress" aria-label="EXP" percent={hud?.expPercent == null ? 0 : Math.round(Math.max(0, Math.min(100, hud.expPercent)))} showInfo={false} strokeColor="#d6ab2c" size="small" />
-      </div>
+      <Progress className="recognition-exp-progress" aria-label="EXP" percent={hud?.expPercent == null ? 0 : Math.round(Math.max(0, Math.min(100, hud.expPercent)))} showInfo={false} strokeColor="#d6ab2c" size="small" />
       {snapshot?.faultCode && <Typography.Text type="danger">{snapshot.faultCode}</Typography.Text>}
-    </section>
+    </div>
   )
 }
 
@@ -66,6 +68,13 @@ function formatRelativeOffset(relativeOffsetMs: number | null): string {
   if (relativeOffsetMs < 0) return `${relativeOffsetMs} ms（左）`
   if (relativeOffsetMs > 0) return `+${relativeOffsetMs} ms（右）`
   return '0 ms（中心）'
+}
+
+function formatPixelOffset(value: number | null): string {
+  if (value == null) return '-'
+  if (value < 0) return `${value} px（左）`
+  if (value > 0) return `+${value} px（右）`
+  return '0 px（中心）'
 }
 
 function ResourceRow({ label, current, maximum, ratio, color }: {

@@ -2,6 +2,7 @@ import type { StationaryAttackConfig } from './types'
 
 type BridgeCommand =
   | { command: 'loadConfig' }
+  | { command: 'loadSessionLog' }
   | { command: 'saveConfig'; config: StationaryAttackConfig }
   | { command: 'startStationary'; config: StationaryAttackConfig; initialFacing: 'left' | 'right' }
   | { command: 'stopStationary' }
