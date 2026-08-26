@@ -16,7 +16,8 @@ public sealed record VisualCharacterTemplateBank(
     int TemplateWidth,
     int TemplateHeight,
     byte[][] TemplatesBgra,
-    int MatcherVersion);
+    int MatcherVersion,
+    DateTimeOffset? CapturedAtUtc = null);
 
 public sealed record VisualStationaryProfile(
     int SchemaVersion,

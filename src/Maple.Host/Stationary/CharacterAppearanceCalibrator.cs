@@ -72,12 +72,13 @@ public sealed class CharacterAppearanceCalibrator
         return true;
     }
 
-    public VisualCharacterTemplateBank Complete() => new(
+    public VisualCharacterTemplateBank Complete(DateTimeOffset? capturedAtUtc = null) => new(
         source,
         source.Width,
         source.Height,
         templates.Select(template => template.ToArray()).ToArray(),
-        MatcherVersion: 1);
+        MatcherVersion: 1,
+        CapturedAtUtc: capturedAtUtc);
 
     private FrameRect CreateAlignmentSearchArea()
     {

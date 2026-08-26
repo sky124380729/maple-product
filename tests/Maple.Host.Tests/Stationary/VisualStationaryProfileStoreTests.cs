@@ -132,6 +132,41 @@ public sealed class VisualStationaryProfileStoreTests : IDisposable
         Assert.Equal(templates[1], loaded.Profile.CharacterAppearance.TemplatesBgra[1]);
     }
 
+    [Fact]
+    public async Task Loads_an_older_schema_two_character_bank_without_a_capture_timestamp()
+    {
+        Directory.CreateDirectory(root);
+        VisualStationaryProfile profile = CharacterProfile(48, 72, [TexturedPixels(48, 72, 0)]);
+        string json = JsonSerializer.Serialize(new
+        {
+            profile.SchemaVersion,
+            profile.FrameWidth,
+            profile.FrameHeight,
+            profile.Platform,
+            profile.NameSource,
+            profile.NameTemplateWidth,
+            profile.NameTemplateHeight,
+            profile.NameTemplateBgra,
+            profile.UpdatedAtUtc,
+            profile.IdentityKind,
+            characterAppearance = new
+            {
+                profile.CharacterAppearance!.Source,
+                profile.CharacterAppearance.TemplateWidth,
+                profile.CharacterAppearance.TemplateHeight,
+                profile.CharacterAppearance.TemplatesBgra,
+                profile.CharacterAppearance.MatcherVersion
+            }
+        }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        await File.WriteAllTextAsync(Path.Combine(root, "profile.json"), json);
+        var store = new VisualStationaryProfileStore(root);
+
+        VisualProfileLoadResult loaded = await store.LoadAsync(1366, 768, CancellationToken.None);
+
+        Assert.NotNull(loaded.Profile?.CharacterAppearance);
+        Assert.Null(loaded.Profile.CharacterAppearance.CapturedAtUtc);
+    }
+
     [Theory]
     [InlineData(23, 32, "VISUAL_CHARACTER_TEMPLATE_TOO_SMALL")]
     [InlineData(24, 31, "VISUAL_CHARACTER_TEMPLATE_TOO_SMALL")]
