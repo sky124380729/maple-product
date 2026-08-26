@@ -23,6 +23,9 @@ public sealed class PreviewWindowHost : IAsyncDisposable
     private WpfButton? visualSetupButton;
     private WpfButton? characterSetupButton;
     private WpfButton? clearVisualButton;
+    private Border? characterTemplatePreviewHost;
+    private TextBlock? characterTemplateMetadata;
+    private StackPanel? characterTemplateItems;
     private Canvas? overlay;
     private PreviewSession? session;
     private RecognitionSession? recognition;
@@ -137,7 +140,35 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         toolbar.Children.Add(characterSetupButton);
         toolbar.Children.Add(clearVisualButton);
         toolbar.Children.Add(recordingStatus);
-        grid.Children.Add(toolbar);
+        characterTemplateMetadata = new TextBlock
+        {
+            Foreground = System.Windows.Media.Brushes.White,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 0)
+        };
+        characterTemplateItems = new StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal
+        };
+        var templatePreviewRow = new StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            Margin = new Thickness(10, 5, 10, 5)
+        };
+        templatePreviewRow.Children.Add(characterTemplateMetadata);
+        templatePreviewRow.Children.Add(characterTemplateItems);
+        characterTemplatePreviewHost = new Border
+        {
+            Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(31, 40, 39)),
+            BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(63, 78, 75)),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Visibility = Visibility.Collapsed,
+            Child = templatePreviewRow
+        };
+        var header = new StackPanel();
+        header.Children.Add(toolbar);
+        header.Children.Add(characterTemplatePreviewHost);
+        grid.Children.Add(header);
         var imageLayer = new Grid();
         imageLayer.Children.Add(image);
         imageLayer.Children.Add(overlay);
@@ -363,6 +394,7 @@ public sealed class PreviewWindowHost : IAsyncDisposable
             Volatile.Write(ref visualObservation, null);
             if (visualSetup is not null) visualSetup.ClearProfile();
             else VisualProfileStatusChanged?.Invoke("notConfigured");
+            RenderCharacterTemplatePreview(null);
             return result;
         }
         finally
@@ -429,8 +461,58 @@ public sealed class PreviewWindowHost : IAsyncDisposable
 
     private void SetVisualProfile(VisualStationaryProfile profile)
     {
+        RenderCharacterTemplatePreview(profile);
         ResetVisualObservation(profile);
         VisualProfileUpdated?.Invoke(profile);
+    }
+
+    private void RenderCharacterTemplatePreview(VisualStationaryProfile? profile)
+    {
+        if (characterTemplatePreviewHost is null ||
+            characterTemplateMetadata is null ||
+            characterTemplateItems is null)
+            return;
+        characterTemplateItems.Children.Clear();
+        VisualCharacterTemplatePreviewModel? preview = profile is null
+            ? null
+            : VisualCharacterTemplatePreview.Create(profile);
+        if (preview is null)
+        {
+            characterTemplateMetadata.Text = string.Empty;
+            characterTemplatePreviewHost.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        characterTemplateMetadata.Text =
+            $"已采集人物模板 {preview.Items.Count} 张  {preview.CapturedAtUtc.ToLocalTime():yyyy-MM-dd HH:mm}";
+        foreach (VisualCharacterTemplatePreviewItem item in preview.Items)
+        {
+            var bitmap = new WriteableBitmap(item.Width, item.Height, 96, 96, PixelFormats.Bgra32, null);
+            bitmap.WritePixels(
+                new Int32Rect(0, 0, item.Width, item.Height),
+                item.BgraPixels.ToArray(),
+                item.Width * 4,
+                0);
+            var thumbnail = new WpfImage
+            {
+                Source = bitmap,
+                Stretch = Stretch.Uniform,
+                Width = 36,
+                Height = 48,
+                SnapsToDevicePixels = true
+            };
+            characterTemplateItems.Children.Add(new Border
+            {
+                Width = 40,
+                Height = 52,
+                Margin = new Thickness(0, 0, 6, 0),
+                BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(92, 112, 108)),
+                BorderThickness = new Thickness(1),
+                Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(18, 24, 23)),
+                Child = thumbnail
+            });
+        }
+        characterTemplatePreviewHost.Visibility = Visibility.Visible;
     }
 
     private void OnPreviewKeyDown(object? sender, System.Windows.Input.KeyEventArgs eventArgs)
@@ -559,6 +641,9 @@ public sealed class PreviewWindowHost : IAsyncDisposable
         visualSetupButton = null;
         characterSetupButton = null;
         clearVisualButton = null;
+        characterTemplatePreviewHost = null;
+        characterTemplateMetadata = null;
+        characterTemplateItems = null;
         visualSetup = null;
         Volatile.Write(ref visualObservation, null);
         latestFrame = null;
